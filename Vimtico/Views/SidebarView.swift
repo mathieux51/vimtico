@@ -66,7 +66,15 @@ struct SidebarView: View {
                 FilterBar(
                     filterText: viewModel.sidebarFilterText,
                     theme: themeManager.currentTheme,
-                    fontSize: max(viewModel.fontSize - 2, 10)
+                    fontSize: max(viewModel.fontSize - 2, 10),
+                    isActive: true
+                )
+            } else if !viewModel.sidebarFilterText.isEmpty {
+                FilterBar(
+                    filterText: viewModel.sidebarFilterText,
+                    theme: themeManager.currentTheme,
+                    fontSize: max(viewModel.fontSize - 2, 10),
+                    isActive: false
                 )
             }
         }
@@ -188,10 +196,13 @@ struct TableRow: View {
 }
 
 /// A small bar showing the current filter text, displayed at the bottom of a pane.
+/// When `isActive` is true, the user is actively typing a filter.
+/// When `isActive` is false, the filter is applied but the input is dismissed.
 struct FilterBar: View {
     let filterText: String
     let theme: Theme
     let fontSize: CGFloat
+    var isActive: Bool = true
     
     var body: some View {
         HStack(spacing: 4) {
@@ -199,15 +210,27 @@ struct FilterBar: View {
                 .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.keywordColor)
             
-            Text(filterText.isEmpty ? "type to filter..." : filterText)
-                .font(.system(size: fontSize, design: .monospaced))
-                .foregroundColor(filterText.isEmpty ? theme.foregroundColor.opacity(0.4) : theme.foregroundColor)
+            if isActive {
+                Text(filterText.isEmpty ? "type to filter..." : filterText)
+                    .font(.system(size: fontSize, design: .monospaced))
+                    .foregroundColor(filterText.isEmpty ? theme.foregroundColor.opacity(0.4) : theme.foregroundColor)
+            } else {
+                Text(filterText)
+                    .font(.system(size: fontSize, design: .monospaced))
+                    .foregroundColor(theme.foregroundColor.opacity(0.7))
+            }
             
             Spacer()
             
-            Text("esc to close")
-                .font(.system(size: max(fontSize - 2, 9), design: .monospaced))
-                .foregroundColor(theme.foregroundColor.opacity(0.3))
+            if isActive {
+                Text("esc to clear")
+                    .font(.system(size: max(fontSize - 2, 9), design: .monospaced))
+                    .foregroundColor(theme.foregroundColor.opacity(0.3))
+            } else {
+                Text("/ to edit")
+                    .font(.system(size: max(fontSize - 2, 9), design: .monospaced))
+                    .foregroundColor(theme.foregroundColor.opacity(0.3))
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)

@@ -57,7 +57,15 @@ struct ResultsTableView: View {
                 FilterBar(
                     filterText: viewModel.resultsFilterText,
                     theme: themeManager.currentTheme,
-                    fontSize: resultsFontSize
+                    fontSize: resultsFontSize,
+                    isActive: true
+                )
+            } else if !viewModel.resultsFilterText.isEmpty {
+                FilterBar(
+                    filterText: viewModel.resultsFilterText,
+                    theme: themeManager.currentTheme,
+                    fontSize: resultsFontSize,
+                    isActive: false
                 )
             }
         }
@@ -102,6 +110,7 @@ struct ResultsTable: View {
                         Section {
                             ForEach(Array(result.rows.enumerated()), id: \.offset) { index, row in
                                 ResultRow(
+                                    rowIndex: index,
                                     columns: result.columns,
                                     values: row,
                                     columnWidths: widths,
@@ -111,7 +120,6 @@ struct ResultsTable: View {
                                     theme: theme,
                                     fontSize: fontSize
                                 )
-                                .id(index)
                             }
                         } header: {
                             HeaderRow(
@@ -125,14 +133,21 @@ struct ResultsTable: View {
                     }
                     .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
                 }
-                .onChange(of: selectedRow) { _, newRow in
-                    if let row = newRow {
-                        withAnimation(.easeInOut(duration: 0.1)) {
-                            proxy.scrollTo(row, anchor: .center)
-                        }
-                    }
+                .onChange(of: selectedRow) { _, _ in
+                    scrollToCell(proxy: proxy)
+                }
+                .onChange(of: selectedColumn) { _, _ in
+                    scrollToCell(proxy: proxy)
                 }
             }
+        }
+    }
+    
+    private func scrollToCell(proxy: ScrollViewProxy) {
+        guard let row = selectedRow else { return }
+        let cellId = "cell-\(row)-\(selectedColumn)"
+        withAnimation(.easeInOut(duration: 0.1)) {
+            proxy.scrollTo(cellId, anchor: .center)
         }
     }
 }
@@ -176,6 +191,7 @@ struct HeaderRow: View {
 }
 
 struct ResultRow: View {
+    let rowIndex: Int
     let columns: [String]
     let values: [String]
     let columnWidths: [CGFloat]
@@ -200,6 +216,7 @@ struct ResultRow: View {
                     .lineLimit(1)
                     .background(isCellSelected ? theme.editorSelectionColor.opacity(0.5) : (selectedColumn == index && isSelected ? theme.editorSelectionColor.opacity(0.2) : Color.clear))
                     .contentShape(Rectangle())
+                    .id("cell-\(rowIndex)-\(index)")
                     .onTapGesture {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(value, forType: .string)

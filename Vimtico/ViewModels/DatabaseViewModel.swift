@@ -81,7 +81,7 @@ class DatabaseViewModel: ObservableObject {
     // MARK: - Filtered lists
     
     var filteredTables: [DatabaseTable] {
-        guard isSidebarFiltering, !sidebarFilterText.isEmpty else { return tables }
+        guard !sidebarFilterText.isEmpty else { return tables }
         return tables.filter { $0.name.localizedCaseInsensitiveContains(sidebarFilterText) }
     }
     
@@ -89,7 +89,7 @@ class DatabaseViewModel: ObservableObject {
     var filteredResultRows: [[String]]? {
         guard let result = queryResult, !result.columns.isEmpty else { return nil }
         let rows = result.rows
-        guard isResultsFiltering, !resultsFilterText.isEmpty else { return rows }
+        guard !resultsFilterText.isEmpty else { return rows }
         let filter = resultsFilterText.lowercased()
         return rows.filter { row in
             row.contains { $0.lowercased().contains(filter) }
@@ -98,7 +98,7 @@ class DatabaseViewModel: ObservableObject {
     
     var filteredSchemaRows: [DatabaseColumn]? {
         guard let info = tableInfo else { return nil }
-        guard isResultsFiltering, !resultsFilterText.isEmpty else { return info.columns }
+        guard !resultsFilterText.isEmpty else { return info.columns }
         let filter = resultsFilterText.lowercased()
         return info.columns.filter {
             $0.name.lowercased().contains(filter) || $0.dataType.lowercased().contains(filter)

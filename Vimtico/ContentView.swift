@@ -182,10 +182,9 @@ struct ContentView: View {
         
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
-        // "/" to start filtering
+        // "/" to start or resume filtering
         if chars == "/" {
             viewModel.isResultsFiltering = true
-            viewModel.resultsFilterText = ""
             return nil
         }
         
@@ -203,8 +202,10 @@ struct ContentView: View {
                     let current = viewModel.selectedResultRow ?? 0
                     viewModel.selectedResultRow = max(current - 1, 0)
                 case "h":
+                    if viewModel.selectedResultRow == nil { viewModel.selectedResultRow = 0 }
                     viewModel.selectedResultColumn = max(viewModel.selectedResultColumn - 1, 0)
                 case "l":
+                    if viewModel.selectedResultRow == nil { viewModel.selectedResultRow = 0 }
                     viewModel.selectedResultColumn = min(viewModel.selectedResultColumn + 1, colCount - 1)
                 case "0":
                     viewModel.selectedResultColumn = 0
@@ -270,10 +271,9 @@ struct ContentView: View {
         
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
-        // "/" to start filtering
+        // "/" to start or resume filtering
         if chars == "/" {
             viewModel.isSidebarFiltering = true
-            viewModel.sidebarFilterText = ""
             return nil
         }
         
@@ -309,12 +309,19 @@ struct ContentView: View {
     }
     
     /// Handles key events when a filter field is active.
-    /// Esc or Enter dismisses the filter. Backspace deletes chars. Other keys append to filter text.
+    /// Enter confirms the filter (keeps it applied). Esc clears the filter. Backspace deletes chars. Other keys append to filter text.
     private func handleFilterKey(_ event: NSEvent, filterText: Binding<String>, isFiltering: Binding<Bool>) -> NSEvent? {
         let keyCode = event.keyCode
         
-        // Esc (53) or Enter (36) - dismiss filter
-        if keyCode == 53 || keyCode == 36 {
+        // Enter (36) - confirm filter: hide the bar but keep filter text applied
+        if keyCode == 36 {
+            isFiltering.wrappedValue = false
+            return nil
+        }
+        
+        // Esc (53) - cancel filter: clear filter text and hide the bar
+        if keyCode == 53 {
+            filterText.wrappedValue = ""
             isFiltering.wrappedValue = false
             return nil
         }
