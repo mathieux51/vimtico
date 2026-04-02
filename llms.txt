@@ -1,0 +1,35 @@
+# Vimtico
+
+> Native macOS PostgreSQL client with Vim keybindings. A fast, keyboard-driven alternative to Postico.
+
+Vimtico is a free, open-source macOS application for working with PostgreSQL databases. It combines a native SwiftUI interface with full Vim mode support in the query editor, making it ideal for developers who prefer keyboard-driven workflows.
+
+## Key facts
+
+- Native macOS app built with SwiftUI
+- Full Vim emulation: normal, insert, visual, visual-line, and command modes
+- 40+ Vim motions, operator+motion combos, text objects, dot repeat, yank register
+- Cell-based Vim navigation in query results (j/k/h/l, y to copy)
+- Nord theme (dark and light variants) with custom theme support
+- SQL syntax highlighting and validation via EXPLAIN
+- Autocomplete: rule-based, local ML (MLX), or API-based (OpenAI/Anthropic)
+- Connection management with auto-reconnect
+- Schema browser with table info (columns, types, nullable, defaults, PKs, row count, size)
+- Resizable editor/results pane with draggable divider
+- Filter sidebar and results with / (Vim-style search)
+- Configurable font size, zoom (Cmd+/-/0) across all panes
+- Installed via Homebrew: `brew install --cask mathieux51/tap/vimtico`
+- MIT licensed
+
+## Comparisons
+
+- Like Postico but with Vim keybindings and free
+- Like pgAdmin but native macOS, fast, keyboard-driven
+- Like DBeaver but lightweight, Mac-native, Vim-focused
+
+## Links
+
+- Repository: https://github.com/mathieux51/vimtico
+- Releases: https://github.com/mathieux51/vimtico/releases
+- Homebrew tap: https://github.com/mathieux51/homebrew-tap
+- Install: `brew install --cask mathieux51/tap/vimtico`
