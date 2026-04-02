@@ -204,12 +204,13 @@ struct ResizableDivider: View {
     let totalHeight: CGFloat
     @Binding var topHeight: CGFloat
     @State private var isDragging = false
+    @State private var dragStartHeight: CGFloat? = nil
     
     var body: some View {
         Rectangle()
             .fill(isDragging ? Color.accentColor : Color.gray.opacity(0.4))
-            .frame(height: isDragging ? 3 : 1)
-            .contentShape(Rectangle().size(width: 10000, height: 12))
+            .frame(height: isDragging ? 4 : 2)
+            .contentShape(Rectangle().size(width: 10000, height: 16))
             .onHover { hovering in
                 if hovering {
                     NSCursor.resizeUpDown.push()
@@ -221,13 +222,17 @@ struct ResizableDivider: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         isDragging = true
-                        let newHeight = topHeight + value.translation.height
+                        if dragStartHeight == nil {
+                            dragStartHeight = topHeight
+                        }
+                        let newHeight = dragStartHeight! + value.translation.height
                         let minTop: CGFloat = 100
                         let minBottom: CGFloat = 100
                         topHeight = min(max(newHeight, minTop), totalHeight - minBottom)
                     }
                     .onEnded { _ in
                         isDragging = false
+                        dragStartHeight = nil
                     }
             )
     }

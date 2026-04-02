@@ -271,7 +271,7 @@ struct TableInfoView: View {
     let fontSize: CGFloat
     
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             // Header with table name and stats
             HStack {
                 Image(systemName: info.table.type == .view ? "eye.fill" : "tablecells.fill")
@@ -337,6 +337,7 @@ struct TableInfoView: View {
             .padding(.vertical, 6)
             .background(theme.secondaryBackgroundColor)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

@@ -167,7 +167,7 @@ struct ConnectionFormView: View {
             }
             .padding()
         }
-        .frame(width: 500, height: 650)
+        .frame(minWidth: 550, idealWidth: 620, minHeight: 600, idealHeight: 750)
         .background(themeManager.currentTheme.backgroundColor)
     }
     
