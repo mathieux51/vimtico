@@ -27,9 +27,6 @@ Pods/
 .LSOverride
 ._*
 
-# Thumbnails
-._*
-
 # Files that might appear in the root of a volume
 .DocumentRevisions-V100
 .fseventsd
@@ -49,4 +46,6 @@ Pods/
 # Temporary files
 *.tmp
 *.temp
-Vimtico-0.1.0.dmg
+
+# Build artifacts
+*.dmg
