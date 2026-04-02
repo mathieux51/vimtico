@@ -12,7 +12,7 @@ struct QueryEditorView: View {
     private var autocompleteTopOffset: CGFloat {
         let lineHeight = ceil(viewModel.fontSize * 1.2)
         let textContainerInset: CGFloat = 8
-        return textContainerInset + lineHeight + 4
+        return textContainerInset + lineHeight + 12
     }
     
     var body: some View {
