@@ -7,7 +7,6 @@ struct ContentView: View {
     @State private var showingConnectionSheet = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var editorHeight: CGFloat = 250
-    @State private var awaitingPaneSwitch = false
     @State private var showingKeybindings = false
     
     var body: some View {
@@ -54,13 +53,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .focusPane)) { notification in
             if let pane = notification.object as? FocusPane {
                 viewModel.focusedPane = pane
-                awaitingPaneSwitch = false
+                viewModel.awaitingPaneSwitch = false
             }
         }
         .onAppear {
             if configManager.configuration.vimMode?.enabled ?? false {
                 viewModel.vimModeEnabled = true
             }
+            // Auto-connect to last used database
+            viewModel.autoConnectIfPossible()
             NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 return self.handleGlobalKeyEvent(event)
             }
@@ -77,22 +78,20 @@ struct ContentView: View {
     }
     
     private func handleGlobalKeyEvent(_ event: NSEvent) -> NSEvent? {
-        guard viewModel.vimModeEnabled else { return event }
-        
-        // Ctrl-w starts pane switch sequence
-        if event.modifierFlags.contains(.control) && event.charactersIgnoringModifiers == "w" {
-            awaitingPaneSwitch = true
+        // Pane navigation (Ctrl-w + h/j/k/l) works regardless of vim mode
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control)
+            && event.charactersIgnoringModifiers == "w" {
+            viewModel.awaitingPaneSwitch = true
             return nil
         }
         
-        if awaitingPaneSwitch {
-            awaitingPaneSwitch = false
+        if viewModel.awaitingPaneSwitch {
+            viewModel.awaitingPaneSwitch = false
             switch event.charactersIgnoringModifiers {
             case "h":
                 viewModel.focusedPane = .sidebar
                 return nil
             case "j":
-                // Move down: editor -> results, sidebar -> results
                 if viewModel.focusedPane == .editor {
                     viewModel.focusedPane = .results
                 } else {
@@ -100,7 +99,6 @@ struct ContentView: View {
                 }
                 return nil
             case "k":
-                // Move up: results -> editor, sidebar -> editor
                 if viewModel.focusedPane == .results {
                     viewModel.focusedPane = .editor
                 } else {
@@ -108,7 +106,6 @@ struct ContentView: View {
                 }
                 return nil
             case "l":
-                // Move right: sidebar -> editor
                 if viewModel.focusedPane == .sidebar {
                     viewModel.focusedPane = .editor
                 } else {
@@ -119,6 +116,9 @@ struct ContentView: View {
                 return event
             }
         }
+        
+        // Vim-specific pane key handling requires vim mode
+        guard viewModel.vimModeEnabled else { return event }
         
         // Pane-specific key handling
         switch viewModel.focusedPane {

@@ -85,11 +85,6 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Editor", systemImage: "text.cursor")
                 }
-            
-            ConfigurationSettingsView()
-                .tabItem {
-                    Label("Configuration", systemImage: "gear")
-                }
         }
         .frame(width: 500, height: 400)
     }
@@ -191,53 +186,6 @@ struct EditorSettingsView: View {
             }
         }
         .padding()
-    }
-}
-
-struct ConfigurationSettingsView: View {
-    @EnvironmentObject var configManager: ConfigurationManager
-    @State private var configJSON: String = ""
-    @State private var errorMessage: String?
-    
-    var body: some View {
-        VStack(alignment: .leading) {
-            Text("Configuration JSON")
-                .font(.headline)
-            
-            TextEditor(text: $configJSON)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 200)
-            
-            if let error = errorMessage {
-                Text(error)
-                    .foregroundColor(.red)
-                    .font(.caption)
-            }
-            
-            HStack {
-                Button("Reset to Defaults") {
-                    configManager.configuration = AppConfiguration()
-                    configJSON = configManager.configurationAsJSON()
-                    configManager.saveConfiguration()
-                }
-                
-                Spacer()
-                
-                Button("Apply") {
-                    do {
-                        try configManager.loadFromJSON(configJSON)
-                        errorMessage = nil
-                    } catch {
-                        errorMessage = "Invalid JSON: \(error.localizedDescription)"
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding()
-        .onAppear {
-            configJSON = configManager.configurationAsJSON()
-        }
     }
 }
 

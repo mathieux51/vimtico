@@ -42,6 +42,9 @@ class DatabaseViewModel: ObservableObject {
     // Sidebar navigation
     @Published var selectedTableIndex: Int = 0
     
+    // Pane navigation (Ctrl-w sequence)
+    var awaitingPaneSwitch: Bool = false
+    
     // Autocomplete
     @Published var autocompleteService = SQLAutocompleteService()
     @Published var autocompleteSuggestions: [SQLCompletion] = []
@@ -58,12 +61,25 @@ class DatabaseViewModel: ObservableObject {
     private let postgresService = PostgreSQLService()
     private let connectionsKey = "savedConnections"
     private let historyKey = "queryHistory"
+    private let lastConnectionKey = "lastConnectedConnectionId"
     private var runningQueryTask: Task<Void, Never>?
     private var validationTask: Task<Void, Never>?
     
     init() {
         loadConnections()
         loadHistory()
+    }
+    
+    /// Attempts to auto-connect to the last used database connection.
+    func autoConnectIfPossible() {
+        guard let idString = UserDefaults.standard.string(forKey: lastConnectionKey),
+              let uuid = UUID(uuidString: idString),
+              let connection = connections.first(where: { $0.id == uuid }) else {
+            return
+        }
+        Task {
+            await connect(to: connection)
+        }
     }
     
     // MARK: - Autocomplete
@@ -164,6 +180,8 @@ class DatabaseViewModel: ObservableObject {
             try await postgresService.connect(to: connection)
             connectedConnection = connection
             isConnected = true
+            // Remember this connection for auto-connect on next launch
+            UserDefaults.standard.set(connection.id.uuidString, forKey: lastConnectionKey)
             await loadTables()
         } catch {
             errorMessage = error.localizedDescription
