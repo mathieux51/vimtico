@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -22,7 +23,7 @@ class DatabaseViewModel: ObservableObject {
     @Published var connectedConnection: DatabaseConnection?
     @Published var tables: [DatabaseTable] = []
     @Published var selectedTable: DatabaseTable?
-    @Published var queryText: String = "select * from "
+    @Published var queryText: String = ""
     @Published var queryResult: QueryResult?
     @Published var isConnected: Bool = false
     @Published var isLoading: Bool = false
@@ -52,6 +53,20 @@ class DatabaseViewModel: ObservableObject {
     // Selected column in results for schema navigation
     @Published var selectedSchemaRow: Int? = nil
     
+    // Yank feedback ("Copied!" toast)
+    @Published var showCopiedFeedback: Bool = false
+    private var copiedFeedbackTask: Task<Void, Never>?
+    
+    func flashCopiedFeedback() {
+        copiedFeedbackTask?.cancel()
+        showCopiedFeedback = true
+        copiedFeedbackTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            showCopiedFeedback = false
+        }
+    }
+    
     // Pane navigation (Ctrl-w sequence)
     var awaitingPaneSwitch: Bool = false
     
@@ -75,8 +90,10 @@ class DatabaseViewModel: ObservableObject {
     private let connectionsKey = "savedConnections"
     private let historyKey = "queryHistory"
     private let lastConnectionKey = "lastConnectedConnectionId"
+    private let savedQueryTextKey = "savedQueryText"
     private var runningQueryTask: Task<Void, Never>?
     private var validationTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Filtered lists
     
@@ -106,8 +123,24 @@ class DatabaseViewModel: ObservableObject {
     }
     
     init() {
+        // Restore saved query text, or use default placeholder
+        if let saved = UserDefaults.standard.string(forKey: savedQueryTextKey), !saved.isEmpty {
+            queryText = saved
+        } else {
+            queryText = "select * from "
+        }
+        
         loadConnections()
         loadHistory()
+        
+        // Auto-save query text to UserDefaults (debounced 1s to avoid excessive writes)
+        $queryText
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] text in
+                guard let self = self else { return }
+                UserDefaults.standard.set(text, forKey: self.savedQueryTextKey)
+            }
+            .store(in: &cancellables)
     }
     
     /// Attempts to auto-connect to the last used database connection.

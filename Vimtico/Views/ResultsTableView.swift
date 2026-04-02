@@ -70,6 +70,23 @@ struct ResultsTableView: View {
                 )
             }
         }
+        .overlay(alignment: .bottom) {
+            if viewModel.showCopiedFeedback {
+                Text("Copied!")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(themeManager.currentTheme.successColor)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(themeManager.currentTheme.backgroundColor)
+                            .shadow(radius: 4)
+                    )
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .animation(.easeInOut(duration: 0.2), value: viewModel.showCopiedFeedback)
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(themeManager.currentTheme.backgroundColor)
     }

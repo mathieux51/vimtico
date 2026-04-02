@@ -125,6 +125,9 @@ struct KeybindingsView: View {
                     ])
                     
                     keybindingSection("Pane Navigation", bindings: [
+                        ("Cmd + 1", "Focus sidebar"),
+                        ("Cmd + 2", "Focus editor"),
+                        ("Cmd + 3", "Focus results"),
                         ("Ctrl + W, h", "Focus sidebar"),
                         ("Ctrl + W, j", "Focus results"),
                         ("Ctrl + W, k", "Focus editor"),
@@ -137,6 +140,8 @@ struct KeybindingsView: View {
                         ("g", "Jump to first row"),
                         ("G", "Jump to last row"),
                         ("0 / $", "Jump to first / last column"),
+                        ("Page Down / Ctrl+D", "Scroll down 20 rows"),
+                        ("Page Up / Ctrl+U", "Scroll up 20 rows"),
                         ("y", "Copy selected cell value"),
                         ("/", "Filter results"),
                     ])
@@ -145,6 +150,8 @@ struct KeybindingsView: View {
                         ("j / k", "Move selection down / up"),
                         ("g", "Jump to first table"),
                         ("G", "Jump to last table"),
+                        ("Page Down / Ctrl+D", "Scroll down 20 items"),
+                        ("Page Up / Ctrl+U", "Scroll up 20 items"),
                         ("Return", "Show table schema info"),
                         ("y", "Copy table name"),
                         ("/", "Filter tables"),

@@ -31,6 +31,23 @@ struct VimticoApp: App {
                 .keyboardShortcut(.return, modifiers: [.command])
             }
             CommandMenu("View") {
+                Button("Focus Sidebar") {
+                    NotificationCenter.default.post(name: .focusPane, object: FocusPane.sidebar)
+                }
+                .keyboardShortcut("1", modifiers: [.command])
+                
+                Button("Focus Editor") {
+                    NotificationCenter.default.post(name: .focusPane, object: FocusPane.editor)
+                }
+                .keyboardShortcut("2", modifiers: [.command])
+                
+                Button("Focus Results") {
+                    NotificationCenter.default.post(name: .focusPane, object: FocusPane.results)
+                }
+                .keyboardShortcut("3", modifiers: [.command])
+                
+                Divider()
+                
                 Button("Zoom In") {
                     NotificationCenter.default.post(name: .zoomIn, object: nil)
                 }
@@ -187,7 +204,7 @@ struct ThemeSwatch: View {
                     theme.stringColor
                     theme.accentColor
                 }
-                .frame(width: 80, height: 32)
+                .frame(width: 100, height: 32)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
@@ -197,6 +214,8 @@ struct ThemeSwatch: View {
                 Text(themeName)
                     .font(.system(size: 11))
                     .foregroundColor(isSelected ? .accentColor : .primary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
         }
         .buttonStyle(.plain)
@@ -218,8 +237,11 @@ struct GeneralSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsSection("Appearance") {
-                SettingRow("Theme") {
-                    HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Theme")
+                        .font(.system(size: 13))
+                    
+                    HStack(spacing: 16) {
                         ForEach(themeManager.availableThemes, id: \.self) { name in
                             ThemeSwatch(
                                 themeName: name,

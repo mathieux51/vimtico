@@ -8,59 +8,68 @@ struct SidebarView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            List(selection: $viewModel.selectedConnection) {
-                Section("Connections") {
-                    ForEach(viewModel.connections) { connection in
-                        ConnectionRow(
-                            connection: connection,
-                            isConnected: viewModel.connectedConnection?.id == connection.id,
-                            isExpanded: expandedConnections.contains(connection.id),
-                            fontSize: viewModel.fontSize,
-                            onToggle: { toggleExpanded(connection.id) },
-                            onConnect: { Task { await viewModel.connect(to: connection) } },
-                            onDisconnect: { viewModel.disconnect() },
-                            onDelete: { viewModel.deleteConnection(connection) }
-                        )
-                    }
-                }
-                
-                if viewModel.isConnected && !viewModel.tables.isEmpty {
-                    let filtered = viewModel.filteredTables
-                    let allTables = filtered.filter { $0.type == .table }
-                    Section("Tables") {
-                        ForEach(Array(allTables.enumerated()), id: \.element.id) { index, table in
-                            TableRow(
-                                table: table,
-                                isSelected: viewModel.selectedTable?.id == table.id,
-                                isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == index,
-                                fontSize: viewModel.fontSize
+            ScrollViewReader { proxy in
+                List(selection: $viewModel.selectedConnection) {
+                    Section("Connections") {
+                        ForEach(viewModel.connections) { connection in
+                            ConnectionRow(
+                                connection: connection,
+                                isConnected: viewModel.connectedConnection?.id == connection.id,
+                                isExpanded: expandedConnections.contains(connection.id),
+                                fontSize: viewModel.fontSize,
+                                onToggle: { toggleExpanded(connection.id) },
+                                onConnect: { Task { await viewModel.connect(to: connection) } },
+                                onDisconnect: { viewModel.disconnect() },
+                                onDelete: { viewModel.deleteConnection(connection) }
                             )
-                            .onTapGesture {
-                                viewModel.selectTable(table)
-                            }
                         }
                     }
                     
-                    let views = filtered.filter { $0.type == .view }
-                    if !views.isEmpty {
-                        Section("Views") {
-                            ForEach(Array(views.enumerated()), id: \.element.id) { index, view in
-                                let globalIndex = allTables.count + index
+                    if viewModel.isConnected && !viewModel.tables.isEmpty {
+                        let filtered = viewModel.filteredTables
+                        let allTables = filtered.filter { $0.type == .table }
+                        Section("Tables") {
+                            ForEach(Array(allTables.enumerated()), id: \.element.id) { index, table in
                                 TableRow(
-                                    table: view,
-                                    isSelected: viewModel.selectedTable?.id == view.id,
-                                    isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == globalIndex,
+                                    table: table,
+                                    isSelected: viewModel.selectedTable?.id == table.id,
+                                    isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == index,
                                     fontSize: viewModel.fontSize
                                 )
+                                .id("sidebar-\(index)")
                                 .onTapGesture {
-                                    viewModel.selectTable(view)
+                                    viewModel.selectTable(table)
+                                }
+                            }
+                        }
+                        
+                        let views = filtered.filter { $0.type == .view }
+                        if !views.isEmpty {
+                            Section("Views") {
+                                ForEach(Array(views.enumerated()), id: \.element.id) { index, view in
+                                    let globalIndex = allTables.count + index
+                                    TableRow(
+                                        table: view,
+                                        isSelected: viewModel.selectedTable?.id == view.id,
+                                        isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == globalIndex,
+                                        fontSize: viewModel.fontSize
+                                    )
+                                    .id("sidebar-\(globalIndex)")
+                                    .onTapGesture {
+                                        viewModel.selectTable(view)
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                .listStyle(.sidebar)
+                .onChange(of: viewModel.selectedTableIndex) { _, newIndex in
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        proxy.scrollTo("sidebar-\(newIndex)", anchor: .center)
+                    }
+                }
             }
-            .listStyle(.sidebar)
             
             if viewModel.isSidebarFiltering {
                 FilterBar(

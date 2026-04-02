@@ -32,6 +32,11 @@ class VimEngine: ObservableObject {
     private var yankRegister: String = ""
     private var yankIsLinewise: Bool = false
     
+    // Visual mode anchor (cursor position when visual mode was entered)
+    private var visualAnchor: Int = 0
+    // Visual mode cursor (tracks the moving end of the selection)
+    private var visualCursor: Int = 0
+    
     /// Describes a repeatable edit command for dot (.) replay.
     private struct EditCommand {
         let type: EditType
@@ -110,6 +115,16 @@ class VimEngine: ObservableObject {
                 return true
             }
             
+            // Visual mode text objects (vi', va", etc.)
+            if pending == "i_obj_v" || pending == "a_obj_v" {
+                let outer = pending == "a_obj_v"
+                if let range = computeTextObjectRange(key: char, outer: outer, textView: textView) {
+                    textView.setSelectedRange(range)
+                    visualAnchor = range.location
+                }
+                return true
+            }
+            
             if pending == "r" {
                 // Replace char under cursor
                 replaceCharUnderCursor(with: char, count: savedCount, textView: textView)
@@ -138,8 +153,14 @@ class VimEngine: ObservableObject {
             }
             
             // Plain f/F/t/T movement
+            if mode == .visual || mode == .visualLine {
+                textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
+            }
             for _ in 0..<savedCount {
                 executeFindMotion(direction: pending, char: char, textView: textView)
+            }
+            if mode == .visual || mode == .visualLine {
+                updateVisualSelection(textView: textView)
             }
             return true
         }
@@ -172,19 +193,20 @@ class VimEngine: ObservableObject {
             
             switch key {
             case "d" where op == "d":
-                for _ in 0..<savedCount { deleteLine(textView: textView) }
+                deleteLines(count: savedCount, textView: textView)
                 if !isReplaying { lastEditCommand = EditCommand(type: .deleteLine, count: savedCount, char: nil, motion: nil, motionChar: nil) }
                 return true
             case "y" where op == "y":
                 yankLine(count: savedCount, textView: textView)
                 return true
             case "c" where op == "c":
-                for _ in 0..<savedCount { changeLine(textView: textView) }
+                changeLines(count: savedCount, textView: textView)
                 if !isReplaying { lastEditCommand = EditCommand(type: .substituteLine, count: savedCount, char: nil, motion: nil, motionChar: nil) }
                 return true
             case "w", "e", "b", "W", "E", "B", "$", "0", "^", "G", "g", "h", "l", "j", "k", "{", "}":
+                let isLinewiseMotion = (key == "j" || key == "k")
                 if let range = computeMotionRange(motion: key, count: savedCount, textView: textView) {
-                    applyOperator(op, range: range, textView: textView)
+                    applyOperator(op, range: range, textView: textView, linewise: isLinewiseMotion)
                     if !isReplaying {
                         lastEditCommand = EditCommand(type: .operatorMotion, count: savedCount, char: nil, motion: op + key, motionChar: nil)
                     }
@@ -263,7 +285,16 @@ class VimEngine: ObservableObject {
             enterInsertMode()
             return true
         case "A":
-            moveToEndOfLine(textView: textView)
+            // Append at end of line: move past last char (no normal-mode adjustment)
+            let aText = textView.string as NSString
+            if let aRange = textView.selectedRanges.first?.rangeValue {
+                let lineRange = aText.lineRange(for: NSRange(location: aRange.location, length: 0))
+                var endPos = lineRange.location + lineRange.length
+                if endPos > lineRange.location && endPos <= aText.length && endPos > 0 {
+                    if aText.character(at: endPos - 1) == 10 { endPos -= 1 }
+                }
+                textView.setSelectedRange(NSRange(location: endPos, length: 0))
+            }
             enterInsertMode()
             return true
         case "I":
@@ -281,10 +312,27 @@ class VimEngine: ObservableObject {
             if !isReplaying { lastEditCommand = EditCommand(type: .insertAbove, count: 1, char: nil, motion: nil, motionChar: nil) }
             return true
         case "v":
+            if let range = textView.selectedRanges.first?.rangeValue {
+                visualAnchor = range.location
+                visualCursor = range.location
+            }
             enterVisualMode()
+            // Select the character under the cursor initially
+            let text = textView.string as NSString
+            if visualAnchor < text.length {
+                textView.setSelectedRange(NSRange(location: visualAnchor, length: 1))
+            }
             return true
         case "V":
+            if let range = textView.selectedRanges.first?.rangeValue {
+                visualAnchor = range.location
+                visualCursor = range.location
+            }
             enterVisualLineMode()
+            // Select the current line initially
+            let vText = textView.string as NSString
+            let lineRange = vText.lineRange(for: NSRange(location: visualAnchor, length: 0))
+            textView.setSelectedRange(lineRange)
             return true
         case ":":
             enterCommandMode()
@@ -408,7 +456,20 @@ class VimEngine: ObservableObject {
             if !isReplaying { lastEditCommand = EditCommand(type: .deleteCharBefore, count: savedCount, char: nil, motion: nil, motionChar: nil) }
             return true
         case "s":
-            deleteCharUnderCursor(textView: textView)
+            let sText = textView.string as NSString
+            if let sRange = textView.selectedRanges.first?.rangeValue {
+                let deleteCount = min(savedCount, sText.length - sRange.location)
+                if deleteCount > 0 {
+                    let deleteRange = NSRange(location: sRange.location, length: deleteCount)
+                    let deleted = sText.substring(with: deleteRange)
+                    yankRegister = deleted
+                    yankIsLinewise = false
+                    if textView.shouldChangeText(in: deleteRange, replacementString: "") {
+                        textView.replaceCharacters(in: deleteRange, with: "")
+                        textView.didChangeText()
+                    }
+                }
+            }
             enterInsertMode()
             if !isReplaying { lastEditCommand = EditCommand(type: .substitute, count: savedCount, char: nil, motion: nil, motionChar: nil) }
             return true
@@ -444,6 +505,7 @@ class VimEngine: ObservableObject {
             return true
         case "P":
             pasteBefore(textView: textView)
+            if !isReplaying { lastEditCommand = EditCommand(type: .paste, count: savedCount, char: nil, motion: nil, motionChar: nil) }
             return true
             
         // Undo
@@ -486,23 +548,82 @@ class VimEngine: ObservableObject {
     // MARK: - Visual Mode
     
     private func handleVisualMode(key: String, modifiers: NSEvent.ModifierFlags, textView: NSTextView) -> Bool {
+        // Handle pending motion that needs a char argument (f/F/t/T, text objects)
+        if let pending = pendingMotion {
+            guard key.count == 1, let char = key.first else {
+                pendingMotion = nil
+                return true
+            }
+            defer { pendingMotion = nil }
+            
+            if pending == "i_obj_v" || pending == "a_obj_v" {
+                let outer = pending == "a_obj_v"
+                if let range = computeTextObjectRange(key: char, outer: outer, textView: textView) {
+                    visualAnchor = range.location
+                    visualCursor = range.location + range.length - 1
+                    textView.setSelectedRange(range)
+                }
+                return true
+            }
+            
+            // f/F/t/T in visual mode
+            if pending == "f" || pending == "F" || pending == "t" || pending == "T" {
+                lastFindChar = char
+                lastFindDirection = pending
+                textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
+                executeFindMotion(direction: pending, char: char, textView: textView)
+                updateVisualSelection(textView: textView)
+                return true
+            }
+            
+            return true
+        }
+        
+        // Handle count prefix (digits) in visual mode
+        if let digit = Int(key), countBuffer.isEmpty ? digit > 0 : true {
+            if digit == 0 && countBuffer.isEmpty {
+                // Fall through to 0 = start of line
+            } else {
+                countBuffer += key
+                count = Int(countBuffer) ?? 1
+                return true
+            }
+        }
+        
+        let savedCount = count
+        defer {
+            if pendingMotion == nil {
+                countBuffer = ""
+                count = 1
+            }
+        }
+        
         // Ctrl combos in visual mode
         if modifiers.contains(.control) {
+            var handled = false
             switch key {
             case "d":
+                textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
                 halfPageDown(textView: textView)
-                return true
+                handled = true
             case "u":
+                textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
                 halfPageUp(textView: textView)
-                return true
+                handled = true
             case "f":
+                textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
                 fullPageDown(textView: textView)
-                return true
+                handled = true
             case "b":
+                textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
                 fullPageUp(textView: textView)
-                return true
+                handled = true
             default:
                 break
+            }
+            if handled {
+                updateVisualSelection(textView: textView)
+                return true
             }
         }
         
@@ -513,14 +634,38 @@ class VimEngine: ObservableObject {
                 textView.setSelectedRange(NSRange(location: range.location, length: 0))
             }
             return true
+        case "v":
+            // Toggle off visual mode
+            mode = .normal
+            if let range = textView.selectedRanges.first?.rangeValue {
+                textView.setSelectedRange(NSRange(location: range.location, length: 0))
+            }
+            return true
         case "h", "j", "k", "l", "w", "b", "e", "W", "B", "E",
              "0", "$", "^", "G", "g", "{", "}", "H", "M", "L", "%":
-            return handleNormalMode(key: key, modifiers: modifiers, textView: textView)
+            // Set cursor to visual cursor position before movement
+            textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
+            let _ = handleNormalMode(key: key, modifiers: modifiers, textView: textView)
+            updateVisualSelection(textView: textView)
+            return true
         case "f", "F", "t", "T":
             pendingMotion = key
             return true
         case ";", ",":
-            return handleNormalMode(key: key, modifiers: modifiers, textView: textView)
+            textView.setSelectedRange(NSRange(location: visualCursor, length: 0))
+            let _ = handleNormalMode(key: key, modifiers: modifiers, textView: textView)
+            updateVisualSelection(textView: textView)
+            return true
+        case "i":
+            // Text object: inner (e.g. vi', viw)
+            pendingOperator = nil
+            pendingMotion = "i_obj_v"
+            return true
+        case "a":
+            // Text object: around (e.g. va', vaw)
+            pendingOperator = nil
+            pendingMotion = "a_obj_v"
+            return true
         case "d", "x":
             yankSelection(textView: textView)
             deleteSelection(textView: textView)
@@ -534,13 +679,15 @@ class VimEngine: ObservableObject {
         case "y":
             yankSelection(textView: textView)
             mode = .normal
+            // Collapse selection to start
+            let yRange = textView.selectedRange()
+            textView.setSelectedRange(NSRange(location: yRange.location, length: 0))
             return true
         case "~":
             toggleCaseSelection(textView: textView)
             mode = .normal
             return true
         case "J":
-            // Join selected lines
             joinLines(textView: textView)
             mode = .normal
             return true
@@ -555,6 +702,32 @@ class VimEngine: ObservableObject {
             return true
         default:
             return false
+        }
+    }
+    
+    /// After a movement in visual mode, recompute selection from anchor to cursor.
+    /// Vim visual selection is inclusive: the character under the cursor is part of the selection.
+    private func updateVisualSelection(textView: NSTextView) {
+        guard mode == .visual || mode == .visualLine else { return }
+        guard let range = textView.selectedRanges.first?.rangeValue else { return }
+        let text = textView.string as NSString
+        // After movement, the cursor is at range.location with length 0
+        let cursorPos = range.location
+        visualCursor = cursorPos
+        
+        if mode == .visualLine {
+            let anchorLineRange = text.lineRange(for: NSRange(location: visualAnchor, length: 0))
+            let cursorLineRange = text.lineRange(for: NSRange(location: cursorPos, length: 0))
+            let start = min(anchorLineRange.location, cursorLineRange.location)
+            let end = max(anchorLineRange.location + anchorLineRange.length, cursorLineRange.location + cursorLineRange.length)
+            textView.setSelectedRange(NSRange(location: start, length: end - start))
+        } else {
+            // Character-wise visual: inclusive selection
+            let start = min(visualAnchor, cursorPos)
+            let end = max(visualAnchor, cursorPos)
+            // +1 because vim visual is inclusive (includes char under cursor)
+            let length = min(end - start + 1, text.length - start)
+            textView.setSelectedRange(NSRange(location: start, length: max(length, 1)))
         }
     }
     
@@ -610,16 +783,30 @@ class VimEngine: ObservableObject {
     // MARK: - Basic Movement
     
     private func moveLeft(textView: NSTextView) {
+        let text = textView.string as NSString
         guard let range = textView.selectedRanges.first?.rangeValue else { return }
-        let newLocation = max(0, range.location - 1)
-        textView.setSelectedRange(NSRange(location: newLocation, length: 0))
+        guard range.location > 0 else { return }
+        // Don't cross line boundary
+        let lineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
+        if range.location <= lineRange.location { return }
+        textView.setSelectedRange(NSRange(location: range.location - 1, length: 0))
     }
     
     private func moveRight(textView: NSTextView) {
-        guard let range = textView.selectedRanges.first?.rangeValue else { return }
         let text = textView.string as NSString
-        let newLocation = min(text.length, range.location + 1)
-        textView.setSelectedRange(NSRange(location: newLocation, length: 0))
+        guard let range = textView.selectedRanges.first?.rangeValue else { return }
+        guard range.location < text.length else { return }
+        // Don't cross line boundary
+        let lineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
+        var lineEnd = lineRange.location + lineRange.length
+        // Exclude trailing newline
+        if lineEnd > lineRange.location && lineEnd <= text.length && lineEnd > 0 {
+            if text.character(at: lineEnd - 1) == 10 { lineEnd -= 1 }
+        }
+        // In normal mode, can't go past last char
+        let maxPos = mode == .normal ? max(lineRange.location, lineEnd - 1) : lineEnd
+        if range.location >= maxPos { return }
+        textView.setSelectedRange(NSRange(location: range.location + 1, length: 0))
     }
     
     private func moveUp(textView: NSTextView) {
@@ -798,12 +985,14 @@ class VimEngine: ObservableObject {
     
     private func moveToStart(textView: NSTextView) {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
+        moveToFirstNonBlank(textView: textView)
     }
     
     private func moveToEnd(textView: NSTextView) {
         let text = textView.string as NSString
         let pos = max(0, text.length - 1)
         textView.setSelectedRange(NSRange(location: pos, length: 0))
+        moveToFirstNonBlank(textView: textView)
     }
     
     private func moveToLine(_ line: Int, textView: NSTextView) {
@@ -819,6 +1008,7 @@ class VimEngine: ObservableObject {
         }
         
         textView.setSelectedRange(NSRange(location: min(location, text.length), length: 0))
+        moveToFirstNonBlank(textView: textView)
     }
     
     // MARK: - Screen Movement (H/M/L)
@@ -981,8 +1171,10 @@ class VimEngine: ObservableObject {
             let lineEnd = lineRange.location + lineRange.length
             while searchPos < lineEnd {
                 if text.character(at: searchPos) == charValue {
-                    let targetPos = max(pos + 1, searchPos - 1)
-                    textView.setSelectedRange(NSRange(location: targetPos, length: 0))
+                    let targetPos = searchPos - 1
+                    if targetPos > pos {
+                        textView.setSelectedRange(NSRange(location: targetPos, length: 0))
+                    }
                     return
                 }
                 searchPos += 1
@@ -992,8 +1184,10 @@ class VimEngine: ObservableObject {
             var searchPos = pos - 1
             while searchPos >= lineRange.location {
                 if text.character(at: searchPos) == charValue {
-                    let targetPos = min(pos - 1, searchPos + 1)
-                    textView.setSelectedRange(NSRange(location: targetPos, length: 0))
+                    let targetPos = searchPos + 1
+                    if targetPos < pos {
+                        textView.setSelectedRange(NSRange(location: targetPos, length: 0))
+                    }
                     return
                 }
                 searchPos -= 1
@@ -1045,7 +1239,8 @@ class VimEngine: ObservableObject {
                 if text.character(at: searchPos) == charValue {
                     found += 1
                     if found == count {
-                        return NSRange(location: searchPos, length: pos - searchPos)
+                        // Include the cursor char: from found char through cursor inclusive
+                        return NSRange(location: searchPos, length: pos - searchPos + 1)
                     }
                 }
                 searchPos -= 1
@@ -1057,7 +1252,8 @@ class VimEngine: ObservableObject {
                 if text.character(at: searchPos) == charValue {
                     found += 1
                     if found == count {
-                        return NSRange(location: searchPos + 1, length: pos - searchPos - 1)
+                        // Till: from one after found char through cursor inclusive
+                        return NSRange(location: searchPos + 1, length: pos - searchPos)
                     }
                 }
                 searchPos -= 1
@@ -1083,7 +1279,7 @@ class VimEngine: ObservableObject {
     private func jumpToMatchingBracket(textView: NSTextView) {
         let text = textView.string as NSString
         guard let range = textView.selectedRanges.first?.rangeValue else { return }
-        let pos = range.location
+        var pos = range.location
         
         guard pos < text.length else { return }
         
@@ -1097,8 +1293,28 @@ class VimEngine: ObservableObject {
         ]
         
         let openBrackets: Set<unichar> = [40, 91, 123] // (, [, {
+        let allBrackets: Set<unichar> = [40, 41, 91, 93, 123, 125]
         
-        let currentChar = text.character(at: pos)
+        // If cursor is not on a bracket, scan forward on the line for the first bracket
+        var currentChar = text.character(at: pos)
+        if !allBrackets.contains(currentChar) {
+            let lineRange = text.lineRange(for: NSRange(location: pos, length: 0))
+            let lineEnd = lineRange.location + lineRange.length
+            var scanPos = pos + 1
+            var foundBracket = false
+            while scanPos < lineEnd {
+                let ch = text.character(at: scanPos)
+                if allBrackets.contains(ch) {
+                    pos = scanPos
+                    currentChar = ch
+                    foundBracket = true
+                    break
+                }
+                scanPos += 1
+            }
+            if !foundBracket { return }
+        }
+        
         guard let matchChar = brackets[currentChar] else { return }
         
         let forward = openBrackets.contains(currentChar)
@@ -1210,6 +1426,60 @@ class VimEngine: ObservableObject {
                 textView.replaceCharacters(in: deleteRange, with: "")
                 textView.didChangeText()
             }
+        }
+        
+        textView.setSelectedRange(NSRange(location: firstNonBlank, length: 0))
+        enterInsertMode()
+    }
+    
+    /// Change count lines: delete content of count lines (preserving first line's indent), enter insert.
+    private func changeLines(count: Int, textView: NSTextView) {
+        let text = textView.string as NSString
+        guard let range = textView.selectedRanges.first?.rangeValue else { return }
+        
+        if count <= 1 {
+            changeLine(textView: textView)
+            return
+        }
+        
+        // Compute range covering count lines
+        let startLineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
+        var endLocation = startLineRange.location
+        for _ in 0..<count {
+            let lr = text.lineRange(for: NSRange(location: endLocation, length: 0))
+            endLocation = lr.location + lr.length
+            if endLocation >= text.length { break }
+        }
+        
+        // Find first non-blank on first line
+        var firstNonBlank = startLineRange.location
+        let firstLineEnd = startLineRange.location + startLineRange.length
+        while firstNonBlank < firstLineEnd && (text.character(at: firstNonBlank) == 32 || text.character(at: firstNonBlank) == 9) {
+            firstNonBlank += 1
+        }
+        
+        // Delete from firstNonBlank to end of last line (but keep trailing newline of last line if it exists)
+        var deleteEnd = min(endLocation, text.length)
+        if deleteEnd > 0 && deleteEnd <= text.length && text.character(at: deleteEnd - 1) == 10 {
+            deleteEnd -= 1
+        }
+        
+        guard deleteEnd > firstNonBlank else {
+            textView.setSelectedRange(NSRange(location: firstNonBlank, length: 0))
+            enterInsertMode()
+            return
+        }
+        
+        let deleteRange = NSRange(location: firstNonBlank, length: deleteEnd - firstNonBlank)
+        let deleted = text.substring(with: deleteRange)
+        yankRegister = deleted
+        yankIsLinewise = false
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(deleted, forType: .string)
+        
+        if textView.shouldChangeText(in: deleteRange, replacementString: "") {
+            textView.replaceCharacters(in: deleteRange, with: "")
+            textView.didChangeText()
         }
         
         textView.setSelectedRange(NSRange(location: firstNonBlank, length: 0))
@@ -1388,6 +1658,37 @@ class VimEngine: ObservableObject {
         textView.setSelectedRange(NSRange(location: newPos, length: 0))
     }
     
+    /// Delete count lines starting from cursor line, yanking all of them.
+    private func deleteLines(count: Int, textView: NSTextView) {
+        let text = textView.string as NSString
+        guard let range = textView.selectedRanges.first?.rangeValue else { return }
+        
+        // Compute the range covering count lines
+        let startLineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
+        var endLocation = startLineRange.location
+        for _ in 0..<count {
+            let lr = text.lineRange(for: NSRange(location: endLocation, length: 0))
+            endLocation = lr.location + lr.length
+            if endLocation >= text.length { break }
+        }
+        
+        let fullRange = NSRange(location: startLineRange.location, length: min(endLocation, text.length) - startLineRange.location)
+        let deleted = text.substring(with: fullRange)
+        yankRegister = deleted
+        yankIsLinewise = true
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(deleted, forType: .string)
+        
+        if textView.shouldChangeText(in: fullRange, replacementString: "") {
+            textView.replaceCharacters(in: fullRange, with: "")
+            textView.didChangeText()
+        }
+        
+        let newText = textView.string as NSString
+        let newPos = min(startLineRange.location, newText.length)
+        textView.setSelectedRange(NSRange(location: newPos, length: 0))
+    }
+    
     private func yankLine(count: Int, textView: NSTextView) {
         let text = textView.string as NSString
         guard let range = textView.selectedRanges.first?.rangeValue else { return }
@@ -1413,20 +1714,26 @@ class VimEngine: ObservableObject {
     }
     
     private func deleteSelection(textView: NSTextView) {
-        textView.delete(nil)
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.length > 0 else { return }
+        if textView.shouldChangeText(in: selectedRange, replacementString: "") {
+            textView.replaceCharacters(in: selectedRange, with: "")
+            textView.didChangeText()
+        }
+        let newText = textView.string as NSString
+        textView.setSelectedRange(NSRange(location: min(selectedRange.location, newText.length), length: 0))
     }
     
+    /// Yank the current selection into the register WITHOUT collapsing the selection.
+    /// Callers are responsible for collapsing or deleting after.
     private func yankSelection(textView: NSTextView) {
         let selectedRange = textView.selectedRange()
         let text = textView.string as NSString
         if selectedRange.length > 0 {
             yankRegister = text.substring(with: selectedRange)
-            yankIsLinewise = false
+            yankIsLinewise = (mode == .visualLine)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(yankRegister, forType: .string)
-        }
-        if let range = textView.selectedRanges.first?.rangeValue {
-            textView.setSelectedRange(NSRange(location: range.location, length: 0))
         }
     }
     
@@ -1459,7 +1766,7 @@ class VimEngine: ObservableObject {
                 textView.replaceCharacters(in: insertRange, with: yankRegister)
                 textView.didChangeText()
             }
-            textView.setSelectedRange(NSRange(location: insertPos + yankRegister.count - 1, length: 0))
+            textView.setSelectedRange(NSRange(location: insertPos + (yankRegister as NSString).length - 1, length: 0))
         }
     }
     
@@ -1486,7 +1793,7 @@ class VimEngine: ObservableObject {
                 textView.replaceCharacters(in: insertRange, with: yankRegister)
                 textView.didChangeText()
             }
-            textView.setSelectedRange(NSRange(location: range.location + yankRegister.count - 1, length: 0))
+            textView.setSelectedRange(NSRange(location: range.location + (yankRegister as NSString).length - 1, length: 0))
         }
     }
     
@@ -1515,7 +1822,15 @@ class VimEngine: ObservableObject {
         case "B":
             for _ in 0..<count { moveWORDBackward(textView: textView) }
         case "$":
-            moveToEndOfLine(textView: textView)
+            // Compute end of line directly (not using moveToEndOfLine which has normal-mode adjustment)
+            let dollarLineRange = text.lineRange(for: NSRange(location: startPos, length: 0))
+            var lineContentEnd = dollarLineRange.location + dollarLineRange.length
+            if lineContentEnd > dollarLineRange.location && lineContentEnd <= text.length && lineContentEnd > 0 {
+                if text.character(at: lineContentEnd - 1) == 10 { lineContentEnd -= 1 }
+            }
+            textView.setSelectedRange(savedRange)
+            if lineContentEnd <= startPos { return nil }
+            return NSRange(location: startPos, length: lineContentEnd - startPos)
         case "0":
             moveToStartOfLine(textView: textView)
         case "^":
@@ -1568,16 +1883,12 @@ class VimEngine: ObservableObject {
         if motion == "e" || motion == "E" {
             rangeEnd = min(rangeEnd + 1, text.length)
         }
-        // For "$", include through end of line content
-        if motion == "$" {
-            rangeEnd = min(rangeEnd + 1, text.length)
-        }
         
         return NSRange(location: rangeStart, length: rangeEnd - rangeStart)
     }
     
     /// Apply an operator (d/c/y) to a given range.
-    private func applyOperator(_ op: String, range: NSRange, textView: NSTextView) {
+    private func applyOperator(_ op: String, range: NSRange, textView: NSTextView, linewise: Bool = false) {
         let text = textView.string as NSString
         guard range.location >= 0 && range.location + range.length <= text.length else { return }
         
@@ -1586,7 +1897,7 @@ class VimEngine: ObservableObject {
         switch op {
         case "d":
             yankRegister = affectedText
-            yankIsLinewise = false
+            yankIsLinewise = linewise
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(affectedText, forType: .string)
             
@@ -1599,7 +1910,7 @@ class VimEngine: ObservableObject {
             
         case "c":
             yankRegister = affectedText
-            yankIsLinewise = false
+            yankIsLinewise = linewise
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(affectedText, forType: .string)
             
@@ -1612,7 +1923,7 @@ class VimEngine: ObservableObject {
             
         case "y":
             yankRegister = affectedText
-            yankIsLinewise = false
+            yankIsLinewise = linewise
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(affectedText, forType: .string)
             statusMessage = "yanked"
@@ -1720,11 +2031,19 @@ class VimEngine: ObservableObject {
             searchPos += 1
         }
         
-        // Find the pair that surrounds pos
+        // Find the pair that surrounds pos, or the first pair after pos on the same line
+        // (Vim behavior: ci' from before the quotes jumps forward to the first pair)
         for i in stride(from: 0, to: quotePositions.count - 1, by: 2) {
             let open = quotePositions[i]
             let close = quotePositions[i + 1]
             if pos >= open && pos <= close {
+                // Cursor is inside or on this pair
+                openPos = open
+                closePos = close
+                break
+            }
+            if open > pos {
+                // Cursor is before this pair, jump forward to it
                 openPos = open
                 closePos = close
                 break
@@ -1804,10 +2123,20 @@ class VimEngine: ObservableObject {
         case .deleteCharBefore:
             for _ in 0..<effectiveCount { deleteCharBeforeCursor(textView: textView) }
         case .substitute:
-            deleteCharUnderCursor(textView: textView)
+            let sText = textView.string as NSString
+            if let sRange = textView.selectedRanges.first?.rangeValue {
+                let deleteCount = min(effectiveCount, sText.length - sRange.location)
+                if deleteCount > 0 {
+                    let deleteRange = NSRange(location: sRange.location, length: deleteCount)
+                    if textView.shouldChangeText(in: deleteRange, replacementString: "") {
+                        textView.replaceCharacters(in: deleteRange, with: "")
+                        textView.didChangeText()
+                    }
+                }
+            }
             enterInsertMode()
         case .substituteLine:
-            for _ in 0..<effectiveCount { changeLine(textView: textView) }
+            changeLines(count: effectiveCount, textView: textView)
         case .changeToEnd:
             deleteToEndOfLine(textView: textView)
             enterInsertMode()
@@ -1822,7 +2151,7 @@ class VimEngine: ObservableObject {
         case .toggleCase:
             for _ in 0..<effectiveCount { toggleCaseUnderCursor(textView: textView) }
         case .deleteLine:
-            for _ in 0..<effectiveCount { deleteLine(textView: textView) }
+            deleteLines(count: effectiveCount, textView: textView)
         case .operatorMotion:
             if let motionStr = cmd.motion, motionStr.count >= 2 {
                 let op = String(motionStr.first!)
@@ -1834,9 +2163,17 @@ class VimEngine: ObservableObject {
                             applyOperator(op, range: range, textView: textView)
                         }
                     }
-                } else {
-                    if let range = computeMotionRange(motion: motion, count: effectiveCount, textView: textView) {
+                } else if motion.count == 2 && (motion.hasPrefix("i") || motion.hasPrefix("a")) {
+                    // Text object: e.g. "iw", "i\"", "a(", etc.
+                    let outer = motion.hasPrefix("a")
+                    let objChar = motion.last!
+                    if let range = computeTextObjectRange(key: objChar, outer: outer, textView: textView) {
                         applyOperator(op, range: range, textView: textView)
+                    }
+                } else {
+                    let isLinewiseMotion = (motion == "j" || motion == "k")
+                    if let range = computeMotionRange(motion: motion, count: effectiveCount, textView: textView) {
+                        applyOperator(op, range: range, textView: textView, linewise: isLinewiseMotion)
                     }
                 }
             }

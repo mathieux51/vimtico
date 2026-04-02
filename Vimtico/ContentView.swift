@@ -74,6 +74,12 @@ struct ContentView: View {
             if let pane = notification.object as? FocusPane {
                 viewModel.focusedPane = pane
                 viewModel.awaitingPaneSwitch = false
+                viewModel.dismissAutocomplete()
+                if pane == .editor {
+                    Self.restoreEditorFocus()
+                } else {
+                    Self.resignEditorFocus()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .editorBecameFirstResponder)) { _ in
@@ -180,6 +186,33 @@ struct ContentView: View {
             return handleFilterKey(event, filterText: $viewModel.resultsFilterText, isFiltering: $viewModel.isResultsFiltering)
         }
         
+        // Page Up (keyCode 116) / Page Down (keyCode 121)
+        let pageSize = 20
+        if event.keyCode == 121 || (mods.contains(.control) && event.charactersIgnoringModifiers == "d") {
+            // Page Down / Ctrl+D
+            if let result = viewModel.queryResult, !result.columns.isEmpty {
+                let rows = viewModel.filteredResultRows ?? result.rows
+                let current = viewModel.selectedResultRow ?? -1
+                viewModel.selectedResultRow = min(current + pageSize, rows.count - 1)
+            } else if viewModel.tableInfo != nil {
+                let columns = viewModel.filteredSchemaRows ?? viewModel.tableInfo!.columns
+                let current = viewModel.selectedSchemaRow ?? -1
+                viewModel.selectedSchemaRow = min(current + pageSize, columns.count - 1)
+            }
+            return nil
+        }
+        if event.keyCode == 116 || (mods.contains(.control) && event.charactersIgnoringModifiers == "u") {
+            // Page Up / Ctrl+U
+            if viewModel.queryResult != nil {
+                let current = viewModel.selectedResultRow ?? 0
+                viewModel.selectedResultRow = max(current - pageSize, 0)
+            } else if viewModel.tableInfo != nil {
+                let current = viewModel.selectedSchemaRow ?? 0
+                viewModel.selectedSchemaRow = max(current - pageSize, 0)
+            }
+            return nil
+        }
+        
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
         // "/" to start or resume filtering
@@ -221,6 +254,7 @@ struct ContentView: View {
                         let cellText = rows[row][viewModel.selectedResultColumn]
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(cellText, forType: .string)
+                        viewModel.flashCopiedFeedback()
                     }
                 default:
                     break
@@ -263,6 +297,7 @@ struct ContentView: View {
                         let text = colIdx < cellValues.count ? cellValues[colIdx] : col.name
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(text, forType: .string)
+                        viewModel.flashCopiedFeedback()
                     }
                 default:
                     break
@@ -283,6 +318,24 @@ struct ContentView: View {
             return handleFilterKey(event, filterText: $viewModel.sidebarFilterText, isFiltering: $viewModel.isSidebarFiltering)
         }
         
+        let filteredTables = viewModel.filteredTables
+        let tableCount = filteredTables.count
+        
+        // Page Up (keyCode 116) / Page Down (keyCode 121) / Ctrl+D / Ctrl+U
+        let pageSize = 20
+        if event.keyCode == 121 || (mods.contains(.control) && event.charactersIgnoringModifiers == "d") {
+            if tableCount > 0 {
+                viewModel.selectedTableIndex = min(viewModel.selectedTableIndex + pageSize, tableCount - 1)
+            }
+            return nil
+        }
+        if event.keyCode == 116 || (mods.contains(.control) && event.charactersIgnoringModifiers == "u") {
+            if tableCount > 0 {
+                viewModel.selectedTableIndex = max(viewModel.selectedTableIndex - pageSize, 0)
+            }
+            return nil
+        }
+        
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
         // "/" to start or resume filtering
@@ -291,8 +344,6 @@ struct ContentView: View {
             return nil
         }
         
-        let filteredTables = viewModel.filteredTables
-        let tableCount = filteredTables.count
         if tableCount > 0 {
             switch chars {
             case "j":
@@ -313,6 +364,7 @@ struct ContentView: View {
                     let table = filteredTables[viewModel.selectedTableIndex]
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(table.name, forType: .string)
+                    viewModel.flashCopiedFeedback()
                 }
             default:
                 break
