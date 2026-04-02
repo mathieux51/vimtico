@@ -190,7 +190,12 @@ struct QueryEditorView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .zoomReset)) { _ in
-            viewModel.fontSize = CGFloat(EditorConfig.defaultFontSize)
+            viewModel.fontSize = CGFloat(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fontSizeChanged)) { notification in
+            if let newSize = notification.object as? Int {
+                viewModel.fontSize = CGFloat(newSize)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .cancelQuery)) { _ in
             viewModel.cancelQuery()
@@ -204,6 +209,8 @@ struct QueryEditorView: View {
             viewModel.openExternalEditor()
         }
         .onAppear {
+            // Load font size from config
+            viewModel.fontSize = CGFloat(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)
             // Configure autocomplete
             let mode = configManager.configuration.editor?.autocompleteMode ?? .ruleBased
             let openAIKey = configManager.configuration.editor?.openAIApiKey

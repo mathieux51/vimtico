@@ -29,7 +29,7 @@ struct VimModeConfig: Codable {
     var relativeLineNumbers: Bool
     var cursorBlink: Bool
     
-    init(enabled: Bool = false, relativeLineNumbers: Bool = false, cursorBlink: Bool = true) {
+    init(enabled: Bool = true, relativeLineNumbers: Bool = false, cursorBlink: Bool = true) {
         self.enabled = enabled
         self.relativeLineNumbers = relativeLineNumbers
         self.cursorBlink = cursorBlink
@@ -38,6 +38,7 @@ struct VimModeConfig: Codable {
 
 struct EditorConfig: Codable {
     var fontFamily: String
+    var fontSize: Int?
     var tabSize: Int
     var insertSpaces: Bool
     var wordWrap: Bool
@@ -46,13 +47,18 @@ struct EditorConfig: Codable {
     var openAIApiKey: String?
     var anthropicApiKey: String?
     
-    // Font size is controlled entirely by zoom (Cmd +/-/0)
     static let minFontSize = 8
     static let maxFontSize = 72
-    static let defaultFontSize = 16
+    static let defaultFontSize = 18
+    
+    /// The effective font size, falling back to the default if not set.
+    var effectiveFontSize: Int {
+        fontSize ?? Self.defaultFontSize
+    }
     
     init(
         fontFamily: String = "SF Mono",
+        fontSize: Int? = nil,
         tabSize: Int = 4,
         insertSpaces: Bool = true,
         wordWrap: Bool = true,
@@ -62,6 +68,7 @@ struct EditorConfig: Codable {
         anthropicApiKey: String? = nil
     ) {
         self.fontFamily = fontFamily
+        self.fontSize = fontSize
         self.tabSize = tabSize
         self.insertSpaces = insertSpaces
         self.wordWrap = wordWrap

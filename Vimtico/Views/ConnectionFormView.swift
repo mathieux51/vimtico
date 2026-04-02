@@ -1,5 +1,29 @@
 import SwiftUI
 
+/// A themed text field style that uses the app's theme colors.
+struct ThemedTextFieldStyle: ViewModifier {
+    let theme: any Theme
+    
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .padding(6)
+            .background(theme.editorBackgroundColor)
+            .foregroundColor(theme.editorForegroundColor)
+            .cornerRadius(6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(theme.borderColor, lineWidth: 1)
+            )
+    }
+}
+
+extension View {
+    func themedTextField(_ theme: any Theme) -> some View {
+        self.modifier(ThemedTextFieldStyle(theme: theme))
+    }
+}
+
 struct ConnectionFormView: View {
     @ObservedObject var viewModel: DatabaseViewModel
     @Binding var isPresented: Bool
@@ -11,6 +35,8 @@ struct ConnectionFormView: View {
     @State private var testResult: String?
     @State private var testSuccess: Bool = false
     @State private var showSSHSettings: Bool = false
+    
+    private var theme: any Theme { themeManager.currentTheme }
     
     init(viewModel: DatabaseViewModel, isPresented: Binding<Bool>, editingConnection: DatabaseConnection? = nil) {
         self.viewModel = viewModel
@@ -32,118 +58,145 @@ struct ConnectionFormView: View {
             HStack {
                 Text(isEditing ? "Edit Connection" : "New Connection")
                     .font(.headline)
+                    .foregroundColor(theme.foregroundColor)
                 Spacer()
                 Button(action: { isPresented = false }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(theme.foregroundColor.opacity(0.5))
                 }
                 .buttonStyle(.plain)
             }
             .padding()
-            .background(themeManager.currentTheme.secondaryBackgroundColor)
+            .background(theme.secondaryBackgroundColor)
             
             Divider()
+                .background(theme.borderColor)
             
             // Form
             ScrollView {
-                Form {
-                    Section("Connection Details") {
-                        TextField("Name (optional)", text: $connection.name)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        TextField("Host", text: $connection.host)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        HStack {
-                            Text("Port")
-                            TextField("", value: $connection.port, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
+                VStack(alignment: .leading, spacing: 20) {
+                    // Connection Details
+                    sectionView("Connection Details") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Name (optional)", text: $connection.name)
+                                .themedTextField(theme)
+                            
+                            TextField("Host", text: $connection.host)
+                                .themedTextField(theme)
+                            
+                            HStack {
+                                Text("Port")
+                                    .foregroundColor(theme.foregroundColor)
+                                    .frame(width: 40, alignment: .leading)
+                                TextField("", value: $connection.port, format: .number)
+                                    .themedTextField(theme)
+                                    .frame(width: 100)
+                            }
+                            
+                            TextField("Database", text: $connection.database)
+                                .themedTextField(theme)
                         }
-                        
-                        TextField("Database", text: $connection.database)
-                            .textFieldStyle(.roundedBorder)
                     }
                     
-                    Section("Authentication") {
-                        TextField("Username", text: $connection.username)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        SecureField("Password", text: $connection.password)
-                            .textFieldStyle(.roundedBorder)
+                    // Authentication
+                    sectionView("Authentication") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Username", text: $connection.username)
+                                .themedTextField(theme)
+                            
+                            SecureField("Password", text: $connection.password)
+                                .themedTextField(theme)
+                        }
                     }
                     
-                    Section("Security") {
+                    // Security
+                    sectionView("Security") {
                         Toggle("Use SSL", isOn: $connection.useSSL)
+                            .toggleStyle(.switch)
+                            .foregroundColor(theme.foregroundColor)
+                            .tint(theme.accentColor)
                     }
                     
-                    Section("SSH Tunnel") {
-                        Toggle("Connect via SSH Tunnel", isOn: $connection.sshEnabled)
-                            .onChange(of: connection.sshEnabled) { _, newValue in
-                                showSSHSettings = newValue
-                            }
-                        
-                        if showSSHSettings {
-                            VStack(alignment: .leading, spacing: 12) {
-                                TextField("SSH Host", text: $connection.sshHost)
-                                    .textFieldStyle(.roundedBorder)
-                                
-                                HStack {
-                                    Text("SSH Port")
-                                    TextField("", value: $connection.sshPort, format: .number)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 80)
+                    // SSH Tunnel
+                    sectionView("SSH Tunnel") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Connect via SSH Tunnel", isOn: $connection.sshEnabled)
+                                .toggleStyle(.switch)
+                                .foregroundColor(theme.foregroundColor)
+                                .tint(theme.accentColor)
+                                .onChange(of: connection.sshEnabled) { _, newValue in
+                                    showSSHSettings = newValue
                                 }
-                                
-                                TextField("SSH Username", text: $connection.sshUsername)
-                                    .textFieldStyle(.roundedBorder)
-                                
-                                Toggle("Use SSH Key Authentication", isOn: $connection.sshUseKeyAuth)
-                                
-                                if connection.sshUseKeyAuth {
-                                    HStack {
-                                        TextField("SSH Key Path", text: $connection.sshKeyPath)
-                                            .textFieldStyle(.roundedBorder)
-                                        
-                                        Button("Browse...") {
-                                            selectSSHKeyFile()
-                                        }
-                                    }
-                                } else {
-                                    SecureField("SSH Password", text: $connection.sshPassword)
-                                        .textFieldStyle(.roundedBorder)
+                            
+                            if showSSHSettings {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    TextField("SSH Host", text: $connection.sshHost)
+                                        .themedTextField(theme)
                                     
-                                    Text("Note: Password authentication requires key-based auth for security. Consider using SSH keys.")
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
+                                    HStack {
+                                        Text("SSH Port")
+                                            .foregroundColor(theme.foregroundColor)
+                                            .frame(width: 60, alignment: .leading)
+                                        TextField("", value: $connection.sshPort, format: .number)
+                                            .themedTextField(theme)
+                                            .frame(width: 100)
+                                    }
+                                    
+                                    TextField("SSH Username", text: $connection.sshUsername)
+                                        .themedTextField(theme)
+                                    
+                                    Toggle("Use SSH Key Authentication", isOn: $connection.sshUseKeyAuth)
+                                        .toggleStyle(.switch)
+                                        .foregroundColor(theme.foregroundColor)
+                                        .tint(theme.accentColor)
+                                    
+                                    if connection.sshUseKeyAuth {
+                                        HStack {
+                                            TextField("SSH Key Path", text: $connection.sshKeyPath)
+                                                .themedTextField(theme)
+                                            
+                                            Button("Browse...") {
+                                                selectSSHKeyFile()
+                                            }
+                                            .foregroundColor(theme.accentColor)
+                                        }
+                                    } else {
+                                        SecureField("SSH Password", text: $connection.sshPassword)
+                                            .themedTextField(theme)
+                                        
+                                        Text("Note: Password authentication requires key-based auth for security. Consider using SSH keys.")
+                                            .font(.caption)
+                                            .foregroundColor(theme.warningColor)
+                                    }
                                 }
+                                .padding(.leading, 16)
                             }
-                            .padding(.leading, 16)
                         }
                     }
                     
                     // Test result
                     if let result = testResult {
-                        Section {
-                            HStack {
-                                Image(systemName: testSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                    .foregroundColor(testSuccess ? .green : .red)
-                                Text(result)
-                                    .foregroundColor(testSuccess ? .green : .red)
-                            }
+                        HStack {
+                            Image(systemName: testSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundColor(testSuccess ? theme.successColor : theme.errorColor)
+                            Text(result)
+                                .foregroundColor(testSuccess ? theme.successColor : theme.errorColor)
                         }
+                        .padding(.horizontal, 16)
                     }
                 }
-                .formStyle(.grouped)
+                .padding(16)
             }
             
             Divider()
+                .background(theme.borderColor)
             
             // Actions
             HStack {
                 Button("Test Connection") {
                     testConnection()
                 }
+                .foregroundColor(theme.accentColor)
                 .disabled(isTesting || !isFormValid)
                 
                 if isTesting {
@@ -156,19 +209,41 @@ struct ConnectionFormView: View {
                 Button("Cancel") {
                     isPresented = false
                 }
+                .foregroundColor(theme.foregroundColor)
                 .keyboardShortcut(.escape, modifiers: [])
                 
                 Button(isEditing ? "Save" : "Connect") {
                     saveAndConnect()
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(theme.accentColor)
                 .disabled(!isFormValid)
                 .keyboardShortcut(.return, modifiers: [.command])
             }
             .padding()
         }
         .frame(minWidth: 550, idealWidth: 620, minHeight: 600, idealHeight: 750)
-        .background(themeManager.currentTheme.backgroundColor)
+        .background(theme.backgroundColor)
+    }
+    
+    @ViewBuilder
+    private func sectionView<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(theme.foregroundColor.opacity(0.7))
+                .textCase(.uppercase)
+            
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.secondaryBackgroundColor)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.borderColor.opacity(0.5), lineWidth: 1)
+        )
     }
     
     private var isFormValid: Bool {

@@ -217,20 +217,23 @@ struct ErrorView: View {
     @State private var copied = false
     
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: fontSize * 3))
-                .foregroundColor(theme.errorColor)
-            
-            Text("Query Error")
-                .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
-                .foregroundColor(theme.foregroundColor)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: fontSize + 4))
+                    .foregroundColor(theme.errorColor)
+                
+                Text("Query Error")
+                    .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.foregroundColor)
+            }
             
             Text(copied ? "Copied!" : message)
                 .font(.system(size: fontSize, design: .monospaced))
                 .foregroundColor(copied ? theme.successColor : theme.errorColor)
-                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
                 .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.secondaryBackgroundColor)
                 .cornerRadius(8)
                 .contentShape(Rectangle())
@@ -243,7 +246,7 @@ struct ErrorView: View {
                     }
                 }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding()
     }
 }
@@ -254,20 +257,23 @@ struct SuccessView: View {
     let fontSize: CGFloat
     
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: fontSize * 3))
-                .foregroundColor(theme.successColor)
-            
-            Text("Query Executed")
-                .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
-                .foregroundColor(theme.foregroundColor)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: fontSize + 4))
+                    .foregroundColor(theme.successColor)
+                
+                Text("Query Executed")
+                    .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.foregroundColor)
+            }
             
             Text(message)
                 .font(.system(size: fontSize, design: .monospaced))
                 .foregroundColor(theme.foregroundColor.opacity(0.8))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding()
     }
 }
 
@@ -352,20 +358,23 @@ struct EmptyStateView: View {
     let fontSize: CGFloat
     
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "text.cursor")
-                .font(.system(size: fontSize * 3))
-                .foregroundColor(theme.foregroundColor.opacity(0.5))
-            
-            Text("No Results")
-                .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
-                .foregroundColor(theme.foregroundColor)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.cursor")
+                    .font(.system(size: fontSize + 4))
+                    .foregroundColor(theme.foregroundColor.opacity(0.5))
+                
+                Text("No Results")
+                    .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.foregroundColor)
+            }
             
             Text("Write a query and press Cmd+Return to execute")
                 .font(.system(size: fontSize, design: .monospaced))
                 .foregroundColor(theme.foregroundColor.opacity(0.7))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding()
     }
 }
 

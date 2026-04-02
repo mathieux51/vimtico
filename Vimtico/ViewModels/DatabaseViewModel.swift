@@ -30,8 +30,8 @@ class DatabaseViewModel: ObservableObject {
     @Published var vimModeEnabled: Bool = false
     @Published var queryHistory: [QueryHistoryItem] = []
     
-    // Shared font size (zoom applies to all panes)
-    @Published var fontSize: CGFloat = 16
+    // Shared font size (zoom applies to all panes, default from settings)
+    @Published var fontSize: CGFloat = CGFloat(EditorConfig.defaultFontSize)
     
     // Pane focus
     @Published var focusedPane: FocusPane = .editor

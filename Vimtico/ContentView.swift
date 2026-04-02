@@ -53,6 +53,11 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .reconnect)) { _ in
             viewModel.reconnect()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .vimModeChanged)) { notification in
+            if let enabled = notification.object as? Bool {
+                viewModel.vimModeEnabled = enabled
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .focusPane)) { notification in
             if let pane = notification.object as? FocusPane {
                 viewModel.focusedPane = pane
@@ -60,7 +65,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            if configManager.configuration.vimMode?.enabled ?? false {
+            if configManager.configuration.vimMode?.enabled ?? true {
                 viewModel.vimModeEnabled = true
             }
             // Auto-connect to last used database
@@ -81,6 +86,12 @@ struct ContentView: View {
     }
     
     private func handleGlobalKeyEvent(_ event: NSEvent) -> NSEvent? {
+        // Esc cancels running query regardless of vim mode or focused pane
+        if event.keyCode == 53 && viewModel.isLoading {
+            viewModel.cancelQuery()
+            // Don't consume: let it also flow to vim engine for mode transition
+        }
+        
         // Pane navigation (Ctrl-w + h/j/k/l) works regardless of vim mode
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control)
             && event.charactersIgnoringModifiers == "w" {
@@ -93,26 +104,23 @@ struct ContentView: View {
             switch event.charactersIgnoringModifiers {
             case "h":
                 viewModel.focusedPane = .sidebar
+                Self.resignEditorFocus()
                 return nil
             case "j":
-                if viewModel.focusedPane == .editor {
-                    viewModel.focusedPane = .results
-                } else {
-                    viewModel.focusedPane = .results
-                }
+                viewModel.focusedPane = .results
+                Self.resignEditorFocus()
                 return nil
             case "k":
-                if viewModel.focusedPane == .results {
-                    viewModel.focusedPane = .editor
-                } else {
-                    viewModel.focusedPane = .editor
-                }
+                viewModel.focusedPane = .editor
+                Self.restoreEditorFocus()
                 return nil
             case "l":
                 if viewModel.focusedPane == .sidebar {
                     viewModel.focusedPane = .editor
+                    Self.restoreEditorFocus()
                 } else {
                     viewModel.focusedPane = .results
+                    Self.resignEditorFocus()
                 }
                 return nil
             default:
@@ -120,10 +128,7 @@ struct ContentView: View {
             }
         }
         
-        // Vim-specific pane key handling requires vim mode
-        guard viewModel.vimModeEnabled else { return event }
-        
-        // Pane-specific key handling
+        // Pane-specific key handling (vim navigation works in all non-editor panes)
         switch viewModel.focusedPane {
         case .results:
             return handleResultsPaneKey(event)
@@ -135,70 +140,96 @@ struct ContentView: View {
     }
     
     private func handleResultsPaneKey(_ event: NSEvent) -> NSEvent? {
-        guard let chars = event.charactersIgnoringModifiers else { return event }
-        guard let result = viewModel.queryResult, !result.columns.isEmpty else { return event }
+        // Let command/control shortcuts through to the system
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.command) || mods.contains(.control) { return event }
         
-        let rowCount = result.rows.count
-        guard rowCount > 0 else { return event }
+        guard let chars = event.charactersIgnoringModifiers else { return nil }
         
-        switch chars {
-        case "j":
-            let current = viewModel.selectedResultRow ?? -1
-            viewModel.selectedResultRow = min(current + 1, rowCount - 1)
-            return nil
-        case "k":
-            let current = viewModel.selectedResultRow ?? 0
-            viewModel.selectedResultRow = max(current - 1, 0)
-            return nil
-        case "g":
-            // gg -> go to first row (simplified: single g goes to top)
-            viewModel.selectedResultRow = 0
-            return nil
-        case "G":
-            viewModel.selectedResultRow = rowCount - 1
-            return nil
-        case "y":
-            // Yank (copy) the selected row
-            if let row = viewModel.selectedResultRow, row < result.rows.count {
-                let rowText = result.rows[row].joined(separator: "\t")
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(rowText, forType: .string)
+        if let result = viewModel.queryResult, !result.columns.isEmpty {
+            let rowCount = result.rows.count
+            if rowCount > 0 {
+                switch chars {
+                case "j":
+                    let current = viewModel.selectedResultRow ?? -1
+                    viewModel.selectedResultRow = min(current + 1, rowCount - 1)
+                case "k":
+                    let current = viewModel.selectedResultRow ?? 0
+                    viewModel.selectedResultRow = max(current - 1, 0)
+                case "g":
+                    viewModel.selectedResultRow = 0
+                case "G":
+                    viewModel.selectedResultRow = rowCount - 1
+                case "y":
+                    if let row = viewModel.selectedResultRow, row < result.rows.count {
+                        let rowText = result.rows[row].joined(separator: "\t")
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(rowText, forType: .string)
+                    }
+                default:
+                    break
+                }
             }
-            return nil
-        default:
-            return event
         }
+        // Consume all non-modifier keystrokes to prevent typing in editor
+        return nil
     }
     
     private func handleSidebarPaneKey(_ event: NSEvent) -> NSEvent? {
-        guard let chars = event.charactersIgnoringModifiers else { return event }
+        // Let command/control shortcuts through to the system
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.command) || mods.contains(.control) { return event }
+        
+        guard let chars = event.charactersIgnoringModifiers else { return nil }
         
         let tableCount = viewModel.tables.count
-        guard tableCount > 0 else { return event }
-        
-        switch chars {
-        case "j":
-            viewModel.selectedTableIndex = min(viewModel.selectedTableIndex + 1, tableCount - 1)
-            return nil
-        case "k":
-            viewModel.selectedTableIndex = max(viewModel.selectedTableIndex - 1, 0)
-            return nil
-        case "g":
-            viewModel.selectedTableIndex = 0
-            return nil
-        case "G":
-            viewModel.selectedTableIndex = tableCount - 1
-            return nil
-        case "\r":
-            // Enter: show schema info for the selected table
-            if viewModel.selectedTableIndex < tableCount {
-                let table = viewModel.tables[viewModel.selectedTableIndex]
-                viewModel.selectTable(table)
+        if tableCount > 0 {
+            switch chars {
+            case "j":
+                viewModel.selectedTableIndex = min(viewModel.selectedTableIndex + 1, tableCount - 1)
+            case "k":
+                viewModel.selectedTableIndex = max(viewModel.selectedTableIndex - 1, 0)
+            case "g":
+                viewModel.selectedTableIndex = 0
+            case "G":
+                viewModel.selectedTableIndex = tableCount - 1
+            case "\r":
+                if viewModel.selectedTableIndex < tableCount {
+                    let table = viewModel.tables[viewModel.selectedTableIndex]
+                    viewModel.selectTable(table)
+                }
+            default:
+                break
             }
-            return nil
-        default:
-            return event
         }
+        // Consume all non-modifier keystrokes to prevent typing in editor
+        return nil
+    }
+    
+    // MARK: - Focus Management
+    
+    private static func resignEditorFocus() {
+        DispatchQueue.main.async {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+    }
+    
+    private static func restoreEditorFocus() {
+        DispatchQueue.main.async {
+            guard let window = NSApp.keyWindow,
+                  let contentView = window.contentView else { return }
+            if let textView = findTextView(in: contentView) {
+                window.makeFirstResponder(textView)
+            }
+        }
+    }
+    
+    private static func findTextView(in view: NSView) -> NSTextView? {
+        if let tv = view as? VimEnabledTextView { return tv }
+        for subview in view.subviews {
+            if let found = findTextView(in: subview) { return found }
+        }
+        return nil
     }
 }
 

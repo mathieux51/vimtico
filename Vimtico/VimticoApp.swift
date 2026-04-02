@@ -82,6 +82,11 @@ struct SettingsView: View {
     
     var body: some View {
         TabView {
+            GeneralSettingsView()
+                .tabItem {
+                    Label("General", systemImage: "gear")
+                }
+            
             ThemeSettingsView()
                 .tabItem {
                     Label("Themes", systemImage: "paintpalette")
@@ -92,7 +97,85 @@ struct SettingsView: View {
                     Label("Editor", systemImage: "text.cursor")
                 }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 500, height: 450)
+    }
+}
+
+struct GeneralSettingsView: View {
+    @EnvironmentObject var configManager: ConfigurationManager
+    @State private var showResetConfirmation = false
+    
+    private var configFilePath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/.config/vimtico/config.json"
+    }
+    
+    var body: some View {
+        Form {
+            Section("Configuration File") {
+                HStack {
+                    Text(configFilePath)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    
+                    Spacer()
+                    
+                    Button("Copy Path") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(configFilePath, forType: .string)
+                    }
+                    
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(configFilePath, inFileViewerRootedAtPath: "")
+                    }
+                }
+                
+                Text("All settings are persisted to this JSON file automatically.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Section("Startup") {
+                HStack {
+                    Text("Auto-connect to the last used database on launch.")
+                    Spacer()
+                    if UserDefaults.standard.string(forKey: "lastConnectedConnectionId") != nil {
+                        Button("Clear Last Connection") {
+                            UserDefaults.standard.removeObject(forKey: "lastConnectedConnectionId")
+                        }
+                    } else {
+                        Text("No saved connection")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            
+            Section("Reset") {
+                HStack {
+                    Text("Reset all settings to their default values.")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Reset to Defaults") {
+                        showResetConfirmation = true
+                    }
+                    .foregroundColor(.red)
+                }
+            }
+        }
+        .padding()
+        .alert("Reset Configuration?", isPresented: $showResetConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                configManager.configuration = AppConfiguration()
+                configManager.saveConfiguration()
+                NotificationCenter.default.post(name: .fontSizeChanged, object: EditorConfig.defaultFontSize)
+                NotificationCenter.default.post(name: .vimModeChanged, object: true)
+            }
+        } message: {
+            Text("This will reset all configuration to defaults. This cannot be undone.")
+        }
     }
 }
 
@@ -122,9 +205,38 @@ struct EditorSettingsView: View {
     
     var body: some View {
         Form {
+            Section("Font Size") {
+                HStack {
+                    Text("Size: \(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)")
+                        .font(.system(.body, design: .monospaced))
+                    
+                    Stepper("",
+                        value: Binding(
+                            get: { configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize },
+                            set: { newValue in
+                                let clamped = min(max(newValue, EditorConfig.minFontSize), EditorConfig.maxFontSize)
+                                if configManager.configuration.editor == nil {
+                                    configManager.configuration.editor = EditorConfig(fontSize: clamped)
+                                } else {
+                                    configManager.configuration.editor?.fontSize = clamped
+                                }
+                                configManager.saveConfiguration()
+                                // Update the running font size via notification
+                                NotificationCenter.default.post(name: .fontSizeChanged, object: clamped)
+                            }
+                        ),
+                        in: EditorConfig.minFontSize...EditorConfig.maxFontSize
+                    )
+                }
+                
+                Text("Controls font size for editor, sidebar, and results. Also adjustable with Cmd +/-/0.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
             Section("Vim Mode") {
                 Toggle("Enable Vim Mode by Default", isOn: Binding(
-                    get: { configManager.configuration.vimMode?.enabled ?? false },
+                    get: { configManager.configuration.vimMode?.enabled ?? true },
                     set: { newValue in
                         if configManager.configuration.vimMode == nil {
                             configManager.configuration.vimMode = VimModeConfig(enabled: newValue)
@@ -132,6 +244,7 @@ struct EditorSettingsView: View {
                             configManager.configuration.vimMode?.enabled = newValue
                         }
                         configManager.saveConfiguration()
+                        NotificationCenter.default.post(name: .vimModeChanged, object: newValue)
                     }
                 ))
             }
@@ -208,4 +321,6 @@ extension Notification.Name {
     static let focusPane = Notification.Name("focusPane")
     static let showKeybindings = Notification.Name("showKeybindings")
     static let reconnect = Notification.Name("reconnect")
+    static let fontSizeChanged = Notification.Name("fontSizeChanged")
+    static let vimModeChanged = Notification.Name("vimModeChanged")
 }
