@@ -92,10 +92,14 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Update Homebrew Tap
-      if: ${{ secrets.TAP_TOKEN != '' }}
       env:
         TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
       run: |
+        if [ -z "${TAP_TOKEN}" ]; then
+          echo "TAP_TOKEN secret not configured, skipping Homebrew tap update"
+          exit 0
+        fi
+
         VERSION="${{ steps.version.outputs.version }}"
         SHA="${{ steps.sha.outputs.sha256 }}"
 
