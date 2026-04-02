@@ -92,6 +92,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Update Homebrew Tap
+      if: ${{ secrets.TAP_TOKEN != '' }}
       env:
         TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
       run: |
@@ -101,37 +102,33 @@ jobs:
         # Clone the homebrew-tap repo
         git clone "https://x-access-token:${TAP_TOKEN}@github.com/mathieux51/homebrew-tap.git" /tmp/homebrew-tap
 
-        # Write updated cask formula (quoted heredoc preserves Ruby #{version})
-        cat > /tmp/homebrew-tap/Casks/vimtico.rb << 'CASKEOF'
-cask "vimtico" do
-  version "VERSION_PLACEHOLDER"
-  sha256 "SHA_PLACEHOLDER"
-
-  url "https://github.com/mathieux51/vimtico/releases/download/v#{version}/Vimtico-#{version}.dmg"
-  name "Vimtico"
-  desc "Native macOS PostgreSQL client with Vim mode and Nord theme"
-  homepage "https://github.com/mathieux51/vimtico"
-
-  livecheck do
-    url :url
-    strategy :github_latest
-  end
-
-  depends_on macos: ">= :sonoma"
-
-  app "Vimtico.app"
-
-  zap trash: [
-    "~/.config/vimtico",
-    "~/Library/Preferences/com.mathieux51.Vimtico.plist",
-    "~/Library/Application Support/Vimtico",
-  ]
-end
-CASKEOF
-
-        # Replace placeholders with actual values
-        sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/" /tmp/homebrew-tap/Casks/vimtico.rb
-        sed -i '' "s/SHA_PLACEHOLDER/${SHA}/" /tmp/homebrew-tap/Casks/vimtico.rb
+        # Write updated cask formula
+        printf '%s\n' \
+          'cask "vimtico" do' \
+          "  version \"${VERSION}\"" \
+          "  sha256 \"${SHA}\"" \
+          '' \
+          '  url "https://github.com/mathieux51/vimtico/releases/download/v#{version}/Vimtico-#{version}.dmg"' \
+          '  name "Vimtico"' \
+          '  desc "Native macOS PostgreSQL client with Vim mode and Nord theme"' \
+          '  homepage "https://github.com/mathieux51/vimtico"' \
+          '' \
+          '  livecheck do' \
+          '    url :url' \
+          '    strategy :github_latest' \
+          '  end' \
+          '' \
+          '  depends_on macos: ">= :sonoma"' \
+          '' \
+          '  app "Vimtico.app"' \
+          '' \
+          '  zap trash: [' \
+          '    "~/.config/vimtico",' \
+          '    "~/Library/Preferences/com.mathieux51.Vimtico.plist",' \
+          '    "~/Library/Application Support/Vimtico",' \
+          '  ]' \
+          'end' \
+          > /tmp/homebrew-tap/Casks/vimtico.rb
 
         # Commit and push
         cd /tmp/homebrew-tap
