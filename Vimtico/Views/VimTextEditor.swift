@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 struct VimTextEditor: NSViewRepresentable {
     @Binding var text: String
@@ -239,6 +240,50 @@ class VimEnabledTextView: NSTextView {
     }
     
     var autocompleteCallbacks = AutocompleteCallbacks()
+    
+    private var modeObservation: NSKeyValueObservation?
+    
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Observe vim mode changes to update cursor style
+        if let engine = vimEngine {
+            // Use Combine to observe mode changes
+            let cancellable = engine.$mode.sink { [weak self] (_: VimModeState) in
+                DispatchQueue.main.async {
+                    self?.needsDisplay = true
+                }
+            }
+            // Store the cancellable (using objc_setAssociatedObject to keep it alive)
+            objc_setAssociatedObject(self, "vimModeCancellable", cancellable, .OBJC_ASSOCIATION_RETAIN)
+        }
+    }
+    
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        let isNormalOrVisual: Bool = {
+            guard let binding = vimModeEnabledBinding, binding.wrappedValue,
+                  let engine = vimEngine else { return false }
+            return engine.mode == .normal || engine.mode == .visual || engine.mode == .visualLine
+        }()
+        
+        if isNormalOrVisual {
+            // Draw a block cursor for normal/visual mode
+            var blockRect = rect
+            let charWidth = NSString("M").size(withAttributes: [.font: self.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)]).width
+            blockRect.size.width = max(charWidth, 8)
+            
+            if flag {
+                color.withAlphaComponent(0.5).set()
+                blockRect.fill()
+            }
+        } else {
+            super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        }
+    }
+    
+    // Need to override to return a wider rect so the block cursor area gets properly invalidated
+    override var rangeForUserCompletion: NSRange {
+        return super.rangeForUserCompletion
+    }
     
     override func keyDown(with event: NSEvent) {
         // Tab always triggers autocomplete regardless of popup state

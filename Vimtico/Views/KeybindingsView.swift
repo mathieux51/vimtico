@@ -105,7 +105,7 @@ struct KeybindingsView: View {
                 .padding()
             }
         }
-        .frame(width: 520, height: 600)
+        .frame(minWidth: 600, idealWidth: 680, minHeight: 650, idealHeight: 780)
         .background(themeManager.currentTheme.backgroundColor)
         .foregroundColor(themeManager.currentTheme.foregroundColor)
     }

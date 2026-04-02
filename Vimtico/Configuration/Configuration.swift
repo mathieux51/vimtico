@@ -49,7 +49,7 @@ struct EditorConfig: Codable {
     // Font size is controlled entirely by zoom (Cmd +/-/0)
     static let minFontSize = 8
     static let maxFontSize = 72
-    static let defaultFontSize = 14
+    static let defaultFontSize = 16
     
     init(
         fontFamily: String = "SF Mono",

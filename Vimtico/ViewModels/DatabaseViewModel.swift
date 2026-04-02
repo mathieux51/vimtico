@@ -31,7 +31,7 @@ class DatabaseViewModel: ObservableObject {
     @Published var queryHistory: [QueryHistoryItem] = []
     
     // Shared font size (zoom applies to all panes)
-    @Published var fontSize: CGFloat = 14
+    @Published var fontSize: CGFloat = 16
     
     // Pane focus
     @Published var focusedPane: FocusPane = .editor

@@ -324,12 +324,13 @@ enum PostgresError: LocalizedError {
 
 /// Extracts a descriptive error message from PostgresNIO and other errors.
 /// PostgresNIO's PSQLError.localizedDescription is often generic (e.g. "PSQLError error 1").
-/// This helper uses String(describing:) which includes server-provided error details such as
+/// String(describing:) also gives a generic message to prevent data leakage.
+/// This helper uses String(reflecting:) which includes server-provided error details such as
 /// the SQLSTATE code, error message, detail, and hint fields.
 func extractPostgresErrorMessage(_ error: Error) -> String {
-    // String(describing:) on PSQLError includes the full server error info,
-    // while localizedDescription only gives a generic label.
-    let fullDescription = String(describing: error)
+    // String(reflecting:) on PSQLError includes the full server error info,
+    // while localizedDescription and String(describing:) only give generic labels.
+    let fullDescription = String(reflecting: error)
     
     // If the full description is more informative than localizedDescription, prefer it.
     let localizedDesc = error.localizedDescription
