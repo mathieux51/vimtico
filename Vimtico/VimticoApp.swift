@@ -323,4 +323,5 @@ extension Notification.Name {
     static let reconnect = Notification.Name("reconnect")
     static let fontSizeChanged = Notification.Name("fontSizeChanged")
     static let vimModeChanged = Notification.Name("vimModeChanged")
+    static let editorBecameFirstResponder = Notification.Name("editorBecameFirstResponder")
 }

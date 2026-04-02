@@ -45,6 +45,9 @@ class DatabaseViewModel: ObservableObject {
     // Pane navigation (Ctrl-w sequence)
     var awaitingPaneSwitch: Bool = false
     
+    // Global key event monitor handle (for cleanup)
+    var eventMonitor: Any? = nil
+    
     // Autocomplete
     @Published var autocompleteService = SQLAutocompleteService()
     @Published var autocompleteSuggestions: [SQLCompletion] = []

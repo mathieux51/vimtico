@@ -15,6 +15,12 @@ struct ContentView: View {
                 viewModel: viewModel,
                 showingConnectionSheet: $showingConnectionSheet
             )
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded {
+                viewModel.focusedPane = .sidebar
+                viewModel.dismissAutocomplete()
+                Self.resignEditorFocus()
+            })
         } detail: {
             GeometryReader { geo in
                 VStack(spacing: 0) {
@@ -33,6 +39,12 @@ struct ContentView: View {
                             focusBorder(for: .results),
                             alignment: .top
                         )
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(TapGesture().onEnded {
+                            viewModel.focusedPane = .results
+                            viewModel.dismissAutocomplete()
+                            Self.resignEditorFocus()
+                        })
                 }
             }
         }
@@ -64,14 +76,23 @@ struct ContentView: View {
                 viewModel.awaitingPaneSwitch = false
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .editorBecameFirstResponder)) { _ in
+            viewModel.focusedPane = .editor
+        }
         .onAppear {
             if configManager.configuration.vimMode?.enabled ?? true {
                 viewModel.vimModeEnabled = true
             }
             // Auto-connect to last used database
             viewModel.autoConnectIfPossible()
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            viewModel.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 return self.handleGlobalKeyEvent(event)
+            }
+        }
+        .onDisappear {
+            if let monitor = viewModel.eventMonitor {
+                NSEvent.removeMonitor(monitor)
+                viewModel.eventMonitor = nil
             }
         }
     }
@@ -104,10 +125,12 @@ struct ContentView: View {
             switch event.charactersIgnoringModifiers {
             case "h":
                 viewModel.focusedPane = .sidebar
+                viewModel.dismissAutocomplete()
                 Self.resignEditorFocus()
                 return nil
             case "j":
                 viewModel.focusedPane = .results
+                viewModel.dismissAutocomplete()
                 Self.resignEditorFocus()
                 return nil
             case "k":
@@ -120,6 +143,7 @@ struct ContentView: View {
                     Self.restoreEditorFocus()
                 } else {
                     viewModel.focusedPane = .results
+                    viewModel.dismissAutocomplete()
                     Self.resignEditorFocus()
                 }
                 return nil

@@ -258,6 +258,14 @@ class VimEnabledTextView: NSTextView {
         }
     }
     
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            NotificationCenter.default.post(name: .editorBecameFirstResponder, object: nil)
+        }
+        return result
+    }
+    
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         let isNormalOrVisual: Bool = {
             guard let binding = vimModeEnabledBinding, binding.wrappedValue,
