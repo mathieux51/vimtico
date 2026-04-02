@@ -214,7 +214,11 @@ struct ResultRow: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .lineLimit(1)
-                    .background(isCellSelected ? theme.editorSelectionColor.opacity(0.5) : (selectedColumn == index && isSelected ? theme.editorSelectionColor.opacity(0.2) : Color.clear))
+                    .background(
+                        isCellSelected ? theme.editorSelectionColor.opacity(0.7) :
+                        (isSelected ? theme.editorSelectionColor.opacity(0.15) :
+                        Color.clear)
+                    )
                     .contentShape(Rectangle())
                     .id("cell-\(rowIndex)-\(index)")
                     .onTapGesture {
@@ -233,7 +237,7 @@ struct ResultRow: View {
             }
         }
         .background(
-            isSelected ? theme.editorSelectionColor :
+            isSelected ? theme.editorSelectionColor.opacity(0.1) :
             (isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor)
         )
     }
