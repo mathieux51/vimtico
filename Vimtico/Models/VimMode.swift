@@ -147,9 +147,17 @@ class VimEngine: ObservableObject {
         case ":":
             enterCommandMode()
             return true
+        case "e":
+            NotificationCenter.default.post(name: .openExternalEditor, object: nil)
+            statusMessage = "Opening external editor..."
+            return true
+        case "\r": // Enter - execute query
+            NotificationCenter.default.post(name: .executeQuery, object: nil)
+            return true
         case "\u{1B}": // Escape
             mode = .normal
             pendingOperator = nil
+            NotificationCenter.default.post(name: .cancelQuery, object: nil)
             return true
         default:
             if pendingOperator == "g" && key == "g" {
@@ -174,6 +182,10 @@ class VimEngine: ObservableObject {
         switch key {
         case "\u{1B}": // Escape
             mode = .normal
+            // Clear selection
+            if let range = textView.selectedRanges.first?.rangeValue {
+                textView.setSelectedRange(NSRange(location: range.location, length: 0))
+            }
             return true
         case "h", "j", "k", "l", "w", "b", "0", "$", "^", "G", "g":
             // Extend selection with movement
@@ -184,6 +196,15 @@ class VimEngine: ObservableObject {
             return true
         case "y":
             yankSelection(textView: textView)
+            mode = .normal
+            return true
+        case "\r": // Enter - execute selected text
+            let nsString = textView.string as NSString
+            let selectedRange = textView.selectedRange()
+            if selectedRange.length > 0 {
+                let selectedText = nsString.substring(with: selectedRange)
+                NotificationCenter.default.post(name: .executeSelectedQuery, object: selectedText)
+            }
             mode = .normal
             return true
         default:

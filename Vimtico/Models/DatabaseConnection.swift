@@ -10,6 +10,15 @@ struct DatabaseConnection: Identifiable, Codable, Hashable {
     var password: String
     var useSSL: Bool
     
+    // SSH Tunnel configuration
+    var sshEnabled: Bool
+    var sshHost: String
+    var sshPort: Int
+    var sshUsername: String
+    var sshPassword: String
+    var sshKeyPath: String
+    var sshUseKeyAuth: Bool
+    
     init(
         id: UUID = UUID(),
         name: String = "",
@@ -18,7 +27,14 @@ struct DatabaseConnection: Identifiable, Codable, Hashable {
         database: String = "",
         username: String = "",
         password: String = "",
-        useSSL: Bool = false
+        useSSL: Bool = false,
+        sshEnabled: Bool = false,
+        sshHost: String = "",
+        sshPort: Int = 22,
+        sshUsername: String = "",
+        sshPassword: String = "",
+        sshKeyPath: String = "~/.ssh/id_rsa",
+        sshUseKeyAuth: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -28,6 +44,13 @@ struct DatabaseConnection: Identifiable, Codable, Hashable {
         self.username = username
         self.password = password
         self.useSSL = useSSL
+        self.sshEnabled = sshEnabled
+        self.sshHost = sshHost
+        self.sshPort = sshPort
+        self.sshUsername = sshUsername
+        self.sshPassword = sshPassword
+        self.sshKeyPath = sshKeyPath
+        self.sshUseKeyAuth = sshUseKeyAuth
     }
     
     var displayName: String {
@@ -70,4 +93,11 @@ struct DatabaseColumn: Identifiable, Hashable {
     let isNullable: Bool
     let defaultValue: String?
     let isPrimaryKey: Bool
+}
+
+struct TableSchemaInfo {
+    let table: DatabaseTable
+    let columns: [DatabaseColumn]
+    let approximateRowCount: Int?
+    let tableSize: String?
 }

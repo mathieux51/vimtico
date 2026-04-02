@@ -43,6 +43,13 @@ struct EditorConfig: Codable {
     var insertSpaces: Bool
     var wordWrap: Bool
     var showLineNumbers: Bool
+    var autocompleteMode: AutocompleteMode
+    var openAIApiKey: String?
+    var anthropicApiKey: String?
+    
+    static let minFontSize = 8
+    static let maxFontSize = 72
+    static let defaultFontSize = 14
     
     init(
         fontSize: Int = 14,
@@ -50,7 +57,10 @@ struct EditorConfig: Codable {
         tabSize: Int = 4,
         insertSpaces: Bool = true,
         wordWrap: Bool = true,
-        showLineNumbers: Bool = true
+        showLineNumbers: Bool = true,
+        autocompleteMode: AutocompleteMode = .ruleBased,
+        openAIApiKey: String? = nil,
+        anthropicApiKey: String? = nil
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -58,6 +68,50 @@ struct EditorConfig: Codable {
         self.insertSpaces = insertSpaces
         self.wordWrap = wordWrap
         self.showLineNumbers = showLineNumbers
+        self.autocompleteMode = autocompleteMode
+        self.openAIApiKey = openAIApiKey
+        self.anthropicApiKey = anthropicApiKey
+    }
+}
+
+/// Autocomplete mode selection
+enum AutocompleteMode: String, Codable, CaseIterable {
+    case disabled = "disabled"
+    case ruleBased = "rule_based"
+    case localML = "local_ml"
+    case openAI = "openai"
+    case anthropic = "anthropic"
+    
+    var displayName: String {
+        switch self {
+        case .disabled: return "Disabled"
+        case .ruleBased: return "Rule-based (Fast, Offline)"
+        case .localML: return "Local ML (MLX, Offline)"
+        case .openAI: return "OpenAI API (Online)"
+        case .anthropic: return "Anthropic API (Online)"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .disabled:
+            return "No autocomplete suggestions"
+        case .ruleBased:
+            return "Fast, lightweight suggestions based on SQL grammar and your database schema. Works offline."
+        case .localML:
+            return "Uses Apple MLX framework with a small local model for smarter suggestions. Works offline but uses more resources."
+        case .openAI:
+            return "Uses OpenAI API for intelligent, context-aware suggestions. Requires API key and internet connection."
+        case .anthropic:
+            return "Uses Anthropic Claude API for intelligent suggestions. Requires API key and internet connection."
+        }
+    }
+    
+    var requiresAPIKey: Bool {
+        switch self {
+        case .openAI, .anthropic: return true
+        default: return false
+        }
     }
 }
 
@@ -68,6 +122,12 @@ struct ConnectionConfig: Codable {
     var database: String
     var username: String
     var useSSL: Bool
+    // SSH Tunnel configuration
+    var sshEnabled: Bool
+    var sshHost: String
+    var sshPort: Int
+    var sshUsername: String
+    var sshKeyPath: String
     
     init(
         name: String = "",
@@ -75,7 +135,12 @@ struct ConnectionConfig: Codable {
         port: Int = 5432,
         database: String = "",
         username: String = "",
-        useSSL: Bool = false
+        useSSL: Bool = false,
+        sshEnabled: Bool = false,
+        sshHost: String = "",
+        sshPort: Int = 22,
+        sshUsername: String = "",
+        sshKeyPath: String = "~/.ssh/id_rsa"
     ) {
         self.name = name
         self.host = host
@@ -83,12 +148,32 @@ struct ConnectionConfig: Codable {
         self.database = database
         self.username = username
         self.useSSL = useSSL
+        self.sshEnabled = sshEnabled
+        self.sshHost = sshHost
+        self.sshPort = sshPort
+        self.sshUsername = sshUsername
+        self.sshKeyPath = sshKeyPath
+    }
+}
+
+enum ConfigError: LocalizedError {
+    case invalidUTF8
+    case decodingFailed(String)
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidUTF8:
+            return "Configuration text is not valid UTF-8"
+        case .decodingFailed(let detail):
+            return detail
+        }
     }
 }
 
 /// Configuration manager that handles loading/saving JSON config
 class ConfigurationManager: ObservableObject {
     @Published var configuration: AppConfiguration = AppConfiguration()
+    @Published var loadError: String? = nil
     
     private let configDirectory: URL
     private let configFile: URL
@@ -109,8 +194,15 @@ class ConfigurationManager: ObservableObject {
                 let data = try Data(contentsOf: configFile)
                 let decoder = JSONDecoder()
                 configuration = try decoder.decode(AppConfiguration.self, from: data)
+                loadError = nil
+            } catch let error as DecodingError {
+                let json = (try? String(contentsOf: configFile, encoding: .utf8)) ?? ""
+                loadError = "Config error: \(Self.describeDecodingError(error, in: json))"
+                print(loadError!)
+                configuration = AppConfiguration()
             } catch {
-                print("Failed to load configuration: \(error)")
+                loadError = "Failed to load configuration: \(error.localizedDescription)"
+                print(loadError!)
                 configuration = AppConfiguration()
                 saveConfiguration()
             }
@@ -133,10 +225,74 @@ class ConfigurationManager: ObservableObject {
     }
     
     func loadFromJSON(_ jsonString: String) throws {
-        let data = jsonString.data(using: .utf8)!
+        guard let data = jsonString.data(using: .utf8) else {
+            throw ConfigError.invalidUTF8
+        }
         let decoder = JSONDecoder()
-        configuration = try decoder.decode(AppConfiguration.self, from: data)
-        saveConfiguration()
+        do {
+            configuration = try decoder.decode(AppConfiguration.self, from: data)
+            saveConfiguration()
+        } catch let error as DecodingError {
+            throw ConfigError.decodingFailed(Self.describeDecodingError(error, in: jsonString))
+        } catch {
+            throw ConfigError.decodingFailed(error.localizedDescription)
+        }
+    }
+    
+    /// Produces a human-readable description of a DecodingError, including the
+    /// JSON path and approximate line/column when possible.
+    private static func describeDecodingError(_ error: DecodingError, in json: String) -> String {
+        switch error {
+        case .typeMismatch(let type, let context):
+            let path = codingPath(context.codingPath)
+            let location = lineColumn(for: context, in: json)
+            return "Type mismatch at \(path)\(location): expected \(type). \(context.debugDescription)"
+            
+        case .valueNotFound(let type, let context):
+            let path = codingPath(context.codingPath)
+            let location = lineColumn(for: context, in: json)
+            return "Missing value at \(path)\(location): expected \(type). \(context.debugDescription)"
+            
+        case .keyNotFound(let key, let context):
+            let path = codingPath(context.codingPath)
+            let location = lineColumn(for: context, in: json)
+            return "Missing key \"\(key.stringValue)\" at \(path)\(location). \(context.debugDescription)"
+            
+        case .dataCorrupted(let context):
+            let path = codingPath(context.codingPath)
+            let location = lineColumn(for: context, in: json)
+            return "Invalid data at \(path)\(location). \(context.debugDescription)"
+            
+        @unknown default:
+            return error.localizedDescription
+        }
+    }
+    
+    private static func codingPath(_ path: [CodingKey]) -> String {
+        if path.isEmpty { return "root" }
+        return path.map { key in
+            if let index = key.intValue {
+                return "[\(index)]"
+            }
+            return ".\(key.stringValue)"
+        }.joined()
+    }
+    
+    /// Attempt to find the line and column for the error context by looking for
+    /// the last key in the coding path within the JSON string.
+    private static func lineColumn(for context: DecodingError.Context, in json: String) -> String {
+        // Try to find the last key in the JSON to give approximate position
+        guard let lastKey = context.codingPath.last?.stringValue else { return "" }
+        let searchTerm = "\"\(lastKey)\""
+        guard let range = json.range(of: searchTerm, options: .backwards) else { return "" }
+        
+        let offset = json.distance(from: json.startIndex, to: range.lowerBound)
+        let prefix = json[json.startIndex..<range.lowerBound]
+        let line = prefix.filter { $0 == "\n" }.count + 1
+        let lastNewline = prefix.lastIndex(of: "\n") ?? json.startIndex
+        let col = json.distance(from: lastNewline, to: range.lowerBound) + (lastNewline == json.startIndex ? 1 : 0)
+        
+        return " (line \(line), col \(col))"
     }
     
     func configurationAsJSON() -> String {

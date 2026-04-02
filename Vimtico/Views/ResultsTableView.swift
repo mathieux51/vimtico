@@ -3,7 +3,6 @@ import SwiftUI
 struct ResultsTableView: View {
     @ObservedObject var viewModel: DatabaseViewModel
     @EnvironmentObject var themeManager: ThemeManager
-    @State private var selectedRows: Set<Int> = []
     
     var body: some View {
         VStack(spacing: 0) {
@@ -12,17 +11,25 @@ struct ResultsTableView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let result = viewModel.queryResult {
                 if let error = result.error {
-                    ErrorView(message: error, theme: themeManager.currentTheme)
+                    ErrorView(message: error, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
                 } else if result.columns.isEmpty {
-                    SuccessView(message: result.summary, theme: themeManager.currentTheme)
+                    SuccessView(message: result.summary, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
                 } else {
-                    ResultsTable(result: result, theme: themeManager.currentTheme)
+                    ResultsTable(
+                        result: result,
+                        theme: themeManager.currentTheme,
+                        fontSize: viewModel.fontSize,
+                        selectedRow: viewModel.selectedResultRow,
+                        isFocused: viewModel.focusedPane == .results
+                    )
                 }
                 
                 // Status bar
-                StatusBar(result: result, theme: themeManager.currentTheme)
+                StatusBar(result: result, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
+            } else if let info = viewModel.tableInfo {
+                TableInfoView(info: info, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
             } else {
-                EmptyStateView(theme: themeManager.currentTheme)
+                EmptyStateView(theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
             }
         }
         .background(themeManager.currentTheme.backgroundColor)
@@ -32,22 +39,57 @@ struct ResultsTableView: View {
 struct ResultsTable: View {
     let result: QueryResult
     let theme: Theme
-    @State private var columnWidths: [String: CGFloat] = [:]
+    let fontSize: CGFloat
+    var selectedRow: Int? = nil
+    var isFocused: Bool = false
+    
+    /// Compute a fixed width per column based on the longest value (header or data).
+    private var columnWidths: [CGFloat] {
+        let charWidth: CGFloat = fontSize * 0.6  // approximate monospaced char width ratio
+        let padding: CGFloat = 24     // horizontal padding (8 * 2) + some breathing room
+        let minWidth: CGFloat = 80
+        let maxWidth: CGFloat = 400
+        
+        return result.columns.indices.map { colIndex in
+            let headerLen = result.columns[colIndex].count
+            let maxDataLen = result.rows.reduce(0) { maxLen, row in
+                guard colIndex < row.count else { return maxLen }
+                return max(maxLen, row[colIndex].count)
+            }
+            let longest = max(headerLen, maxDataLen)
+            let computed = CGFloat(longest) * charWidth + padding
+            return min(max(computed, minWidth), maxWidth)
+        }
+    }
     
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                Section {
-                    ForEach(Array(result.rows.enumerated()), id: \.offset) { index, row in
-                        ResultRow(
-                            columns: result.columns,
-                            values: row,
-                            isAlternate: index % 2 == 1,
-                            theme: theme
-                        )
+        let widths = columnWidths
+        ScrollViewReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        ForEach(Array(result.rows.enumerated()), id: \.offset) { index, row in
+                            ResultRow(
+                                columns: result.columns,
+                                values: row,
+                                columnWidths: widths,
+                                isAlternate: index % 2 == 1,
+                                isSelected: isFocused && selectedRow == index,
+                                theme: theme,
+                                fontSize: fontSize
+                            )
+                            .id(index)
+                        }
+                    } header: {
+                        HeaderRow(columns: result.columns, columnWidths: widths, theme: theme, fontSize: fontSize)
                     }
-                } header: {
-                    HeaderRow(columns: result.columns, theme: theme)
+                }
+            }
+            .onChange(of: selectedRow) { _, newRow in
+                if let row = newRow {
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        proxy.scrollTo(row, anchor: .center)
+                    }
                 }
             }
         }
@@ -56,17 +98,31 @@ struct ResultsTable: View {
 
 struct HeaderRow: View {
     let columns: [String]
+    let columnWidths: [CGFloat]
     let theme: Theme
+    let fontSize: CGFloat
+    @State private var copiedIndex: Int? = nil
     
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(columns, id: \.self) { column in
-                Text(column)
-                    .font(.system(.body, design: .monospaced).bold())
-                    .foregroundColor(theme.foregroundColor)
-                    .frame(minWidth: 100, alignment: .leading)
+            ForEach(Array(columns.enumerated()), id: \.offset) { index, column in
+                Text(copiedIndex == index ? "Copied!" : column)
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .foregroundColor(copiedIndex == index ? theme.successColor : theme.foregroundColor)
+                    .frame(width: index < columnWidths.count ? columnWidths[index] : 100, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(column, forType: .string)
+                        copiedIndex = index
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                            if copiedIndex == index {
+                                copiedIndex = nil
+                            }
+                        }
+                    }
                 
                 Divider()
                     .background(theme.borderColor)
@@ -79,31 +135,51 @@ struct HeaderRow: View {
 struct ResultRow: View {
     let columns: [String]
     let values: [String]
+    let columnWidths: [CGFloat]
     let isAlternate: Bool
+    var isSelected: Bool = false
     let theme: Theme
+    let fontSize: CGFloat
+    @State private var copiedIndex: Int? = nil
     
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(Array(zip(columns, values)), id: \.0) { column, value in
-                Text(value)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(value == "NULL" ? theme.commentColor : theme.foregroundColor)
-                    .frame(minWidth: 100, alignment: .leading)
+            ForEach(Array(columns.enumerated()), id: \.offset) { index, _ in
+                let value = index < values.count ? values[index] : ""
+                Text(copiedIndex == index ? "Copied!" : value)
+                    .font(.system(size: fontSize, design: .monospaced))
+                    .foregroundColor(copiedIndex == index ? theme.successColor : (value == "NULL" ? theme.commentColor : theme.foregroundColor))
+                    .frame(width: index < columnWidths.count ? columnWidths[index] : 100, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(value, forType: .string)
+                        copiedIndex = index
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                            if copiedIndex == index {
+                                copiedIndex = nil
+                            }
+                        }
+                    }
                 
                 Divider()
                     .background(theme.borderColor)
             }
         }
-        .background(isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor)
+        .background(
+            isSelected ? theme.editorSelectionColor :
+            (isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor)
+        )
     }
 }
 
 struct StatusBar: View {
     let result: QueryResult
     let theme: Theme
+    let fontSize: CGFloat
     
     var body: some View {
         HStack {
@@ -111,14 +187,14 @@ struct StatusBar: View {
                 .foregroundColor(result.isSuccess ? theme.successColor : theme.errorColor)
             
             Text(result.summary)
-                .font(.caption)
+                .font(.system(size: max(fontSize - 2, 10), design: .monospaced))
                 .foregroundColor(theme.foregroundColor)
             
             Spacer()
             
             if !result.columns.isEmpty {
                 Text("\(result.columns.count) columns")
-                    .font(.caption)
+                    .font(.system(size: max(fontSize - 2, 10), design: .monospaced))
                     .foregroundColor(theme.foregroundColor.opacity(0.7))
             }
         }
@@ -131,19 +207,20 @@ struct StatusBar: View {
 struct ErrorView: View {
     let message: String
     let theme: Theme
+    let fontSize: CGFloat
     
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
+                .font(.system(size: fontSize * 3))
                 .foregroundColor(theme.errorColor)
             
             Text("Query Error")
-                .font(.headline)
+                .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.foregroundColor)
             
             Text(message)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: fontSize, design: .monospaced))
                 .foregroundColor(theme.errorColor)
                 .multilineTextAlignment(.center)
                 .padding()
@@ -158,40 +235,117 @@ struct ErrorView: View {
 struct SuccessView: View {
     let message: String
     let theme: Theme
+    let fontSize: CGFloat
     
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 48))
+                .font(.system(size: fontSize * 3))
                 .foregroundColor(theme.successColor)
             
             Text("Query Executed")
-                .font(.headline)
+                .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.foregroundColor)
             
             Text(message)
-                .font(.body)
+                .font(.system(size: fontSize, design: .monospaced))
                 .foregroundColor(theme.foregroundColor.opacity(0.8))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
+struct TableInfoView: View {
+    let info: TableSchemaInfo
+    let theme: Theme
+    let fontSize: CGFloat
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with table name and stats
+            HStack {
+                Image(systemName: info.table.type == .view ? "eye.fill" : "tablecells.fill")
+                    .foregroundColor(theme.keywordColor)
+                
+                Text(info.table.fullName)
+                    .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.foregroundColor)
+                
+                Spacer()
+                
+                if let rowCount = info.approximateRowCount {
+                    Text("~\(rowCount.formatted()) rows")
+                        .font(.system(size: fontSize - 1, design: .monospaced))
+                        .foregroundColor(theme.foregroundColor.opacity(0.7))
+                }
+                
+                if let size = info.tableSize {
+                    Text(size)
+                        .font(.system(size: fontSize - 1, design: .monospaced))
+                        .foregroundColor(theme.foregroundColor.opacity(0.7))
+                        .padding(.leading, 8)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            .background(theme.secondaryBackgroundColor)
+            
+            Divider()
+            
+            // Columns table
+            let columns = ["column", "type", "nullable", "default", "pk"]
+            let rows: [[String]] = info.columns.map { col in
+                [
+                    col.name,
+                    col.dataType,
+                    col.isNullable ? "yes" : "no",
+                    col.defaultValue ?? "",
+                    col.isPrimaryKey ? "yes" : ""
+                ]
+            }
+            let schemaResult = QueryResult(
+                columns: columns,
+                rows: rows,
+                rowsAffected: info.columns.count,
+                executionTime: 0
+            )
+            ResultsTable(result: schemaResult, theme: theme, fontSize: fontSize)
+            
+            // Footer status
+            HStack {
+                Image(systemName: "info.circle.fill")
+                    .foregroundColor(theme.keywordColor)
+                Text("\(info.columns.count) columns")
+                    .font(.system(size: max(fontSize - 2, 10), design: .monospaced))
+                    .foregroundColor(theme.foregroundColor)
+                Spacer()
+                Text(info.table.type.rawValue.lowercased())
+                    .font(.system(size: max(fontSize - 2, 10), design: .monospaced))
+                    .foregroundColor(theme.foregroundColor.opacity(0.7))
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(theme.secondaryBackgroundColor)
+        }
+    }
+}
+
 struct EmptyStateView: View {
     let theme: Theme
+    let fontSize: CGFloat
     
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "text.cursor")
-                .font(.system(size: 48))
+                .font(.system(size: fontSize * 3))
                 .foregroundColor(theme.foregroundColor.opacity(0.5))
             
             Text("No Results")
-                .font(.headline)
+                .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.foregroundColor)
             
             Text("Write a query and press Cmd+Return to execute")
-                .font(.body)
+                .font(.system(size: fontSize, design: .monospaced))
                 .foregroundColor(theme.foregroundColor.opacity(0.7))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

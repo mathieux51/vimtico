@@ -5,7 +5,43 @@ struct VimTextEditor: NSViewRepresentable {
     @Binding var text: String
     @ObservedObject var vimEngine: VimEngine
     @Binding var vimModeEnabled: Bool
+    @Binding var fontSize: CGFloat
     let theme: Theme
+    
+    // Autocomplete support
+    @Binding var showingAutocomplete: Bool
+    @Binding var cursorPositionAfterCompletion: Int?
+    var onAutocompleteAccept: (() -> Void)?
+    var onAutocompleteUp: (() -> Void)?
+    var onAutocompleteDown: (() -> Void)?
+    var onAutocompleteDismiss: (() -> Void)?
+    var onTab: (() -> Void)?
+    
+    init(text: Binding<String>,
+         vimEngine: VimEngine,
+         vimModeEnabled: Binding<Bool>,
+         fontSize: Binding<CGFloat>,
+         theme: Theme,
+         showingAutocomplete: Binding<Bool> = .constant(false),
+         cursorPositionAfterCompletion: Binding<Int?> = .constant(nil),
+         onAutocompleteAccept: (() -> Void)? = nil,
+         onAutocompleteUp: (() -> Void)? = nil,
+         onAutocompleteDown: (() -> Void)? = nil,
+         onAutocompleteDismiss: (() -> Void)? = nil,
+         onTab: (() -> Void)? = nil) {
+        self._text = text
+        self.vimEngine = vimEngine
+        self._vimModeEnabled = vimModeEnabled
+        self._fontSize = fontSize
+        self.theme = theme
+        self._showingAutocomplete = showingAutocomplete
+        self._cursorPositionAfterCompletion = cursorPositionAfterCompletion
+        self.onAutocompleteAccept = onAutocompleteAccept
+        self.onAutocompleteUp = onAutocompleteUp
+        self.onAutocompleteDown = onAutocompleteDown
+        self.onAutocompleteDismiss = onAutocompleteDismiss
+        self.onTab = onTab
+    }
     
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -17,7 +53,7 @@ struct VimTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -37,6 +73,15 @@ struct VimTextEditor: NSViewRepresentable {
         textView.vimEngine = vimEngine
         textView.vimModeEnabledBinding = $vimModeEnabled
         
+        // Store autocomplete callbacks
+        textView.autocompleteCallbacks = VimEnabledTextView.AutocompleteCallbacks(
+            onAccept: onAutocompleteAccept,
+            onUp: onAutocompleteUp,
+            onDown: onAutocompleteDown,
+            onDismiss: onAutocompleteDismiss,
+            onTab: onTab
+        )
+        
         scrollView.documentView = textView
         
         applyTheme(to: textView)
@@ -48,12 +93,30 @@ struct VimTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? VimEnabledTextView else { return }
         
         if textView.string != text {
-            let selectedRanges = textView.selectedRanges
             textView.string = text
-            textView.selectedRanges = selectedRanges
+            
+            // If we have a cursor position from autocomplete, apply it
+            if let cursorPos = cursorPositionAfterCompletion {
+                let safePos = min(cursorPos, textView.string.count)
+                textView.setSelectedRange(NSRange(location: safePos, length: 0))
+                DispatchQueue.main.async {
+                    self.cursorPositionAfterCompletion = nil
+                }
+            }
         }
         
+        // Update font size if changed
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        
         textView.vimModeEnabledBinding = $vimModeEnabled
+        textView.isShowingAutocomplete = showingAutocomplete
+        textView.autocompleteCallbacks = VimEnabledTextView.AutocompleteCallbacks(
+            onAccept: onAutocompleteAccept,
+            onUp: onAutocompleteUp,
+            onDown: onAutocompleteDown,
+            onDismiss: onAutocompleteDismiss,
+            onTab: onTab
+        )
         applyTheme(to: textView)
         applySyntaxHighlighting(to: textView)
     }
@@ -76,22 +139,23 @@ struct VimTextEditor: NSViewRepresentable {
         
         let fullRange = NSRange(location: 0, length: textStorage.length)
         
-        // Reset to default color
+        // Reset to default color and font
         textStorage.addAttribute(.foregroundColor, value: NSColor(theme.editorForegroundColor), range: fullRange)
+        textStorage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular), range: fullRange)
         
         let text = textStorage.string
         
         // SQL Keywords
         let keywords = [
-            "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "LIKE", "BETWEEN",
-            "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "ON",
-            "GROUP", "BY", "HAVING", "ORDER", "ASC", "DESC", "LIMIT", "OFFSET",
-            "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE",
-            "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "DATABASE", "SCHEMA",
-            "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "UNIQUE", "CHECK", "DEFAULT",
-            "NULL", "NOT", "TRUE", "FALSE", "AS", "DISTINCT", "ALL", "UNION", "EXCEPT", "INTERSECT",
-            "CASE", "WHEN", "THEN", "ELSE", "END", "CAST", "COALESCE", "NULLIF",
-            "EXISTS", "ANY", "SOME", "WITH", "RECURSIVE", "RETURNING"
+            "select", "from", "where", "and", "or", "not", "in", "like", "between",
+            "join", "left", "right", "inner", "outer", "full", "cross", "on",
+            "group", "by", "having", "order", "asc", "desc", "limit", "offset",
+            "insert", "into", "values", "update", "set", "delete",
+            "create", "alter", "drop", "table", "index", "view", "database", "schema",
+            "primary", "key", "foreign", "references", "unique", "check", "default",
+            "null", "not", "true", "false", "as", "distinct", "all", "union", "except", "intersect",
+            "case", "when", "then", "else", "end", "cast", "coalesce", "nullif",
+            "exists", "any", "some", "with", "recursive", "returning"
         ]
         
         for keyword in keywords {
@@ -164,8 +228,51 @@ struct VimTextEditor: NSViewRepresentable {
 class VimEnabledTextView: NSTextView {
     var vimEngine: VimEngine?
     var vimModeEnabledBinding: Binding<Bool>?
+    var isShowingAutocomplete: Bool = false
+    
+    struct AutocompleteCallbacks {
+        var onAccept: (() -> Void)?
+        var onUp: (() -> Void)?
+        var onDown: (() -> Void)?
+        var onDismiss: (() -> Void)?
+        var onTab: (() -> Void)?
+    }
+    
+    var autocompleteCallbacks = AutocompleteCallbacks()
     
     override func keyDown(with event: NSEvent) {
+        // Tab always triggers autocomplete regardless of popup state
+        if event.keyCode == 48 && !event.modifierFlags.contains(.shift) {
+            autocompleteCallbacks.onTab?()
+            return
+        }
+        
+        // Handle autocomplete keys when popup is showing
+        if isShowingAutocomplete {
+            switch event.keyCode {
+            case 36: // Return/Enter - accept selected suggestion
+                autocompleteCallbacks.onAccept?()
+                return
+            case 126: // Up arrow - move selection up
+                autocompleteCallbacks.onUp?()
+                return
+            case 125: // Down arrow - move selection down
+                autocompleteCallbacks.onDown?()
+                return
+            case 53: // Escape - dismiss autocomplete
+                autocompleteCallbacks.onDismiss?()
+                return
+            default:
+                // Dismiss autocomplete for other keys, then process normally
+                autocompleteCallbacks.onDismiss?()
+            }
+        } else {
+            // Escape dismisses any leftover state
+            if event.keyCode == 53 {
+                autocompleteCallbacks.onDismiss?()
+            }
+        }
+        
         // Check if vim mode is enabled
         guard let binding = vimModeEnabledBinding, binding.wrappedValue,
               let engine = vimEngine else {

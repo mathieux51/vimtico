@@ -30,6 +30,24 @@ struct VimticoApp: App {
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
             }
+            CommandMenu("View") {
+                Button("Zoom In") {
+                    NotificationCenter.default.post(name: .zoomIn, object: nil)
+                }
+                .keyboardShortcut("+", modifiers: [.command])
+                
+                Button("Zoom Out") {
+                    NotificationCenter.default.post(name: .zoomOut, object: nil)
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+                
+                Button("Reset Zoom") {
+                    NotificationCenter.default.post(name: .zoomReset, object: nil)
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+                
+                Divider()
+            }
             CommandMenu("Vim") {
                 Button("Toggle Vim Mode") {
                     NotificationCenter.default.post(name: .toggleVimMode, object: nil)
@@ -97,29 +115,88 @@ struct EditorSettingsView: View {
     
     var body: some View {
         Form {
-            Toggle("Enable Vim Mode by Default", isOn: Binding(
-                get: { configManager.configuration.vimMode?.enabled ?? false },
-                set: { newValue in
-                    if configManager.configuration.vimMode == nil {
-                        configManager.configuration.vimMode = VimModeConfig(enabled: newValue)
-                    } else {
-                        configManager.configuration.vimMode?.enabled = newValue
+            Section("Vim Mode") {
+                Toggle("Enable Vim Mode by Default", isOn: Binding(
+                    get: { configManager.configuration.vimMode?.enabled ?? false },
+                    set: { newValue in
+                        if configManager.configuration.vimMode == nil {
+                            configManager.configuration.vimMode = VimModeConfig(enabled: newValue)
+                        } else {
+                            configManager.configuration.vimMode?.enabled = newValue
+                        }
+                        configManager.saveConfiguration()
                     }
-                    configManager.saveConfiguration()
-                }
-            ))
+                ))
+            }
             
-            TextField("Font Size", value: Binding(
-                get: { configManager.configuration.editor?.fontSize ?? 14 },
-                set: { newValue in
-                    if configManager.configuration.editor == nil {
-                        configManager.configuration.editor = EditorConfig(fontSize: newValue)
-                    } else {
-                        configManager.configuration.editor?.fontSize = newValue
+            Section("Font") {
+                TextField("Font Size", value: Binding(
+                    get: { configManager.configuration.editor?.fontSize ?? 14 },
+                    set: { newValue in
+                        if configManager.configuration.editor == nil {
+                            configManager.configuration.editor = EditorConfig(fontSize: newValue)
+                        } else {
+                            configManager.configuration.editor?.fontSize = newValue
+                        }
+                        configManager.saveConfiguration()
                     }
-                    configManager.saveConfiguration()
+                ), format: .number)
+            }
+            
+            Section("SQL Autocomplete") {
+                Picker("Autocomplete Mode", selection: Binding(
+                    get: { configManager.configuration.editor?.autocompleteMode ?? .ruleBased },
+                    set: { newValue in
+                        if configManager.configuration.editor == nil {
+                            configManager.configuration.editor = EditorConfig(autocompleteMode: newValue)
+                        } else {
+                            configManager.configuration.editor?.autocompleteMode = newValue
+                        }
+                        configManager.saveConfiguration()
+                    }
+                )) {
+                    ForEach(AutocompleteMode.allCases, id: \.self) { mode in
+                        VStack(alignment: .leading) {
+                            Text(mode.displayName)
+                        }
+                        .tag(mode)
+                    }
                 }
-            ), format: .number)
+                
+                Text(configManager.configuration.editor?.autocompleteMode.description ?? AutocompleteMode.ruleBased.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                if configManager.configuration.editor?.autocompleteMode == .openAI {
+                    SecureField("OpenAI API Key", text: Binding(
+                        get: { configManager.configuration.editor?.openAIApiKey ?? "" },
+                        set: { newValue in
+                            if configManager.configuration.editor == nil {
+                                configManager.configuration.editor = EditorConfig(openAIApiKey: newValue)
+                            } else {
+                                configManager.configuration.editor?.openAIApiKey = newValue
+                            }
+                            configManager.saveConfiguration()
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+                
+                if configManager.configuration.editor?.autocompleteMode == .anthropic {
+                    SecureField("Anthropic API Key", text: Binding(
+                        get: { configManager.configuration.editor?.anthropicApiKey ?? "" },
+                        set: { newValue in
+                            if configManager.configuration.editor == nil {
+                                configManager.configuration.editor = EditorConfig(anthropicApiKey: newValue)
+                            } else {
+                                configManager.configuration.editor?.anthropicApiKey = newValue
+                            }
+                            configManager.saveConfiguration()
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+            }
         }
         .padding()
     }
@@ -175,5 +252,12 @@ struct ConfigurationSettingsView: View {
 extension Notification.Name {
     static let newConnection = Notification.Name("newConnection")
     static let executeQuery = Notification.Name("executeQuery")
+    static let executeSelectedQuery = Notification.Name("executeSelectedQuery")
+    static let cancelQuery = Notification.Name("cancelQuery")
+    static let openExternalEditor = Notification.Name("openExternalEditor")
     static let toggleVimMode = Notification.Name("toggleVimMode")
+    static let zoomIn = Notification.Name("zoomIn")
+    static let zoomOut = Notification.Name("zoomOut")
+    static let zoomReset = Notification.Name("zoomReset")
+    static let focusPane = Notification.Name("focusPane")
 }

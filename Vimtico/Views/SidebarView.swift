@@ -14,6 +14,7 @@ struct SidebarView: View {
                         connection: connection,
                         isConnected: viewModel.connectedConnection?.id == connection.id,
                         isExpanded: expandedConnections.contains(connection.id),
+                        fontSize: viewModel.fontSize,
                         onToggle: { toggleExpanded(connection.id) },
                         onConnect: { Task { await viewModel.connect(to: connection) } },
                         onDisconnect: { viewModel.disconnect() },
@@ -23,23 +24,35 @@ struct SidebarView: View {
             }
             
             if viewModel.isConnected && !viewModel.tables.isEmpty {
+                let allTables = viewModel.tables.filter { $0.type == .table }
                 Section("Tables") {
-                    ForEach(viewModel.tables.filter { $0.type == .table }) { table in
-                        TableRow(table: table, isSelected: viewModel.selectedTable?.id == table.id)
-                            .onTapGesture {
-                                viewModel.selectTable(table)
-                            }
+                    ForEach(Array(allTables.enumerated()), id: \.element.id) { index, table in
+                        TableRow(
+                            table: table,
+                            isSelected: viewModel.selectedTable?.id == table.id,
+                            isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == index,
+                            fontSize: viewModel.fontSize
+                        )
+                        .onTapGesture {
+                            viewModel.selectTable(table)
+                        }
                     }
                 }
                 
                 let views = viewModel.tables.filter { $0.type == .view }
                 if !views.isEmpty {
                     Section("Views") {
-                        ForEach(views) { view in
-                            TableRow(table: view, isSelected: viewModel.selectedTable?.id == view.id)
-                                .onTapGesture {
-                                    viewModel.selectTable(view)
-                                }
+                        ForEach(Array(views.enumerated()), id: \.element.id) { index, view in
+                            let globalIndex = allTables.count + index
+                            TableRow(
+                                table: view,
+                                isSelected: viewModel.selectedTable?.id == view.id,
+                                isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == globalIndex,
+                                fontSize: viewModel.fontSize
+                            )
+                            .onTapGesture {
+                                viewModel.selectTable(view)
+                            }
                         }
                     }
                 }
@@ -70,6 +83,7 @@ struct ConnectionRow: View {
     let connection: DatabaseConnection
     let isConnected: Bool
     let isExpanded: Bool
+    let fontSize: CGFloat
     let onToggle: () -> Void
     let onConnect: () -> Void
     let onDisconnect: () -> Void
@@ -81,13 +95,14 @@ struct ConnectionRow: View {
         HStack {
             Image(systemName: isConnected ? "cylinder.fill" : "cylinder")
                 .foregroundColor(isConnected ? .green : .secondary)
+                .font(.system(size: fontSize))
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(connection.displayName)
-                    .font(.body)
+                    .font(.system(size: fontSize))
                 
                 Text("\(connection.host):\(connection.port)")
-                    .font(.caption)
+                    .font(.system(size: max(fontSize - 2, 10)))
                     .foregroundColor(.secondary)
             }
             
@@ -118,29 +133,40 @@ struct ConnectionRow: View {
         } message: {
             Text("Are you sure you want to delete '\(connection.displayName)'?")
         }
+        .onTapGesture {
+            if !isConnected {
+                onConnect()
+            }
+        }
     }
 }
 
 struct TableRow: View {
     let table: DatabaseTable
     let isSelected: Bool
+    var isHighlighted: Bool = false
+    let fontSize: CGFloat
     
     var body: some View {
         HStack {
             Image(systemName: table.type == .view ? "eye" : "tablecells")
                 .foregroundColor(.secondary)
+                .font(.system(size: fontSize))
             
             VStack(alignment: .leading) {
                 Text(table.name)
-                    .font(.body)
+                    .font(.system(size: fontSize))
                 
                 Text(table.schema)
-                    .font(.caption)
+                    .font(.system(size: max(fontSize - 2, 10)))
                     .foregroundColor(.secondary)
             }
         }
         .padding(.vertical, 2)
-        .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+        .background(
+            isHighlighted ? Color.accentColor.opacity(0.3) :
+            (isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+        )
         .cornerRadius(4)
     }
 }
