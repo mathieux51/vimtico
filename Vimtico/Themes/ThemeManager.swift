@@ -22,6 +22,10 @@ class ThemeManager: ObservableObject {
         }
     }
     
+    func theme(named name: String) -> Theme {
+        themes[name] ?? currentTheme
+    }
+    
     func registerTheme(_ theme: Theme) {
         themes[theme.name] = theme
     }

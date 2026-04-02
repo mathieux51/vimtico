@@ -205,9 +205,7 @@ struct QueryEditorView: View {
                 viewModel.executeSelectedQuery(sql)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openExternalEditor)) { _ in
-            viewModel.openExternalEditor()
-        }
+
         .onAppear {
             // Load font size from config
             viewModel.fontSize = CGFloat(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)

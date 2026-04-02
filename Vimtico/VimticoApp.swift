@@ -102,9 +102,108 @@ struct SettingsView: View {
                     Label("Autocomplete", systemImage: "sparkles")
                 }
         }
-        .frame(width: 620, height: 520)
+        .frame(width: 520, height: 460)
     }
 }
+
+// MARK: - Reusable Setting Row Components
+
+/// A labeled row: label on the left, control on the right.
+struct SettingRow<Content: View>: View {
+    let label: String
+    let content: Content
+    
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .frame(width: 140, alignment: .trailing)
+            content
+            Spacer()
+        }
+    }
+}
+
+/// A section with a title divider line.
+struct SettingsSection<Content: View>: View {
+    let title: String
+    let content: Content
+    
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            Divider()
+            
+            content
+        }
+    }
+}
+
+/// A small hint text below a control.
+struct SettingHint: View {
+    let text: String
+    
+    var body: some View {
+        HStack {
+            Spacer()
+                .frame(width: 144)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Theme Swatch
+
+struct ThemeSwatch: View {
+    let themeName: String
+    let theme: Theme
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                // Color preview bar
+                HStack(spacing: 0) {
+                    theme.backgroundColor
+                    theme.editorSelectionColor
+                    theme.keywordColor
+                    theme.stringColor
+                    theme.accentColor
+                }
+                .frame(width: 80, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                )
+                
+                Text(themeName)
+                    .font(.system(size: 11))
+                    .foregroundColor(isSelected ? .accentColor : .primary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - General Settings
 
 struct GeneralSettingsView: View {
     @EnvironmentObject var themeManager: ThemeManager
@@ -117,66 +216,86 @@ struct GeneralSettingsView: View {
     }
     
     var body: some View {
-        Form {
-            Section("Appearance") {
-                Picker("Theme", selection: $themeManager.currentThemeName) {
-                    ForEach(themeManager.availableThemes, id: \.self) { theme in
-                        Text(theme).tag(theme)
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsSection("Appearance") {
+                SettingRow("Theme") {
+                    HStack(spacing: 12) {
+                        ForEach(themeManager.availableThemes, id: \.self) { name in
+                            ThemeSwatch(
+                                themeName: name,
+                                theme: themeManager.theme(named: name),
+                                isSelected: themeManager.currentThemeName == name
+                            ) {
+                                themeManager.setTheme(named: name)
+                                configManager.configuration.theme = name
+                                configManager.saveConfiguration()
+                            }
+                        }
                     }
-                }
-                .onChange(of: themeManager.currentThemeName) { _, newValue in
-                    themeManager.setTheme(named: newValue)
-                    configManager.configuration.theme = newValue
-                    configManager.saveConfiguration()
                 }
             }
             
-            Section("Startup") {
-                HStack {
-                    Text("Auto-connect to the last used database on launch.")
-                    Spacer()
+            SettingsSection("Startup") {
+                SettingRow("Auto-connect") {
                     if UserDefaults.standard.string(forKey: "lastConnectedConnectionId") != nil {
-                        Button("Clear Last Connection") {
-                            UserDefaults.standard.removeObject(forKey: "lastConnectedConnectionId")
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 12))
+                            Text("Last connection saved")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            Button("Clear") {
+                                UserDefaults.standard.removeObject(forKey: "lastConnectedConnectionId")
+                            }
+                            .controlSize(.small)
                         }
                     } else {
-                        Text("No saved connection")
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Image(systemName: "minus.circle")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 12))
+                            Text("No saved connection")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
+                SettingHint(text: "Automatically reconnects to the last database on launch.")
             }
             
-            Section("Data") {
-                HStack {
-                    Text("Settings file")
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(configFilePath)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    
-                    Button("Reveal") {
-                        NSWorkspace.shared.selectFile(configFilePath, inFileViewerRootedAtPath: "")
+            SettingsSection("Data") {
+                SettingRow("Config file") {
+                    HStack(spacing: 8) {
+                        Text(configFilePath)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        
+                        Button {
+                            NSWorkspace.shared.selectFile(configFilePath, inFileViewerRootedAtPath: "")
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .controlSize(.small)
+                        .help("Reveal in Finder")
+                    }
+                }
+                
+                SettingRow("") {
+                    Button(role: .destructive) {
+                        showResetConfirmation = true
+                    } label: {
+                        Text("Reset to Defaults...")
                     }
                     .controlSize(.small)
                 }
             }
             
-            Section("Reset") {
-                HStack {
-                    Text("Reset all settings to their default values.")
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Button("Reset to Defaults") {
-                        showResetConfirmation = true
-                    }
-                    .foregroundColor(.red)
-                }
-            }
+            Spacer()
         }
-        .padding()
+        .padding(20)
         .alert("Reset Configuration?", isPresented: $showResetConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Reset", role: .destructive) {
@@ -191,85 +310,114 @@ struct GeneralSettingsView: View {
     }
 }
 
+// MARK: - Editor Settings
+
 struct EditorSettingsView: View {
     @EnvironmentObject var configManager: ConfigurationManager
     
+    private var fontSizeBinding: Binding<Int> {
+        Binding(
+            get: { configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize },
+            set: { newValue in
+                let clamped = min(max(newValue, EditorConfig.minFontSize), EditorConfig.maxFontSize)
+                ensureEditorConfig()
+                configManager.configuration.editor?.fontSize = clamped
+                configManager.saveConfiguration()
+                NotificationCenter.default.post(name: .fontSizeChanged, object: clamped)
+            }
+        )
+    }
+    
+    private var tabSizeBinding: Binding<Int> {
+        Binding(
+            get: { configManager.configuration.editor?.tabSize ?? 4 },
+            set: { newValue in
+                let clamped = min(max(newValue, 1), 16)
+                ensureEditorConfig()
+                configManager.configuration.editor?.tabSize = clamped
+                configManager.saveConfiguration()
+            }
+        )
+    }
+    
     var body: some View {
-        Form {
-            Section("Font") {
-                HStack {
-                    Text("Size: \(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)")
-                        .font(.system(.body, design: .monospaced))
-                    
-                    Stepper("",
-                        value: Binding(
-                            get: { configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize },
-                            set: { newValue in
-                                let clamped = min(max(newValue, EditorConfig.minFontSize), EditorConfig.maxFontSize)
-                                ensureEditorConfig()
-                                configManager.configuration.editor?.fontSize = clamped
-                                configManager.saveConfiguration()
-                                NotificationCenter.default.post(name: .fontSizeChanged, object: clamped)
-                            }
-                        ),
-                        in: EditorConfig.minFontSize...EditorConfig.maxFontSize
-                    )
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsSection("Font") {
+                SettingRow("Size") {
+                    HStack(spacing: 8) {
+                        Text("\(fontSizeBinding.wrappedValue) pt")
+                            .font(.system(size: 13, design: .monospaced))
+                            .frame(width: 44, alignment: .trailing)
+                        Stepper("", value: fontSizeBinding, in: EditorConfig.minFontSize...EditorConfig.maxFontSize)
+                            .labelsHidden()
+                    }
                 }
+                SettingHint(text: "Also adjustable with Cmd +/-/0. Editor uses a +4 offset for monospace.")
                 
-                Text("Also adjustable with Cmd +/-/0.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                SettingRow("Preview") {
+                    Text("select * from users;")
+                        .font(.system(size: CGFloat(fontSizeBinding.wrappedValue), design: .monospaced))
+                        .foregroundColor(.primary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.primary.opacity(0.05))
+                        .cornerRadius(4)
+                }
             }
             
-            Section("Indentation") {
-                HStack {
-                    Text("Tab Size")
-                    Spacer()
-                    Stepper("\(configManager.configuration.editor?.tabSize ?? 4)",
-                        value: Binding(
-                            get: { configManager.configuration.editor?.tabSize ?? 4 },
-                            set: { newValue in
-                                let clamped = min(max(newValue, 1), 16)
-                                ensureEditorConfig()
-                                configManager.configuration.editor?.tabSize = clamped
-                                configManager.saveConfiguration()
-                            }
-                        ),
-                        in: 1...16
-                    )
+            SettingsSection("Indentation") {
+                SettingRow("Tab size") {
+                    HStack(spacing: 8) {
+                        Text("\(tabSizeBinding.wrappedValue)")
+                            .font(.system(size: 13, design: .monospaced))
+                            .frame(width: 20, alignment: .trailing)
+                        Stepper("", value: tabSizeBinding, in: 1...16)
+                            .labelsHidden()
+                    }
                 }
                 
-                Toggle("Insert Spaces Instead of Tabs", isOn: Binding(
-                    get: { configManager.configuration.editor?.insertSpaces ?? true },
-                    set: { newValue in
-                        ensureEditorConfig()
-                        configManager.configuration.editor?.insertSpaces = newValue
-                        configManager.saveConfiguration()
-                    }
-                ))
+                SettingRow("") {
+                    Toggle("Insert spaces instead of tabs", isOn: Binding(
+                        get: { configManager.configuration.editor?.insertSpaces ?? true },
+                        set: { newValue in
+                            ensureEditorConfig()
+                            configManager.configuration.editor?.insertSpaces = newValue
+                            configManager.saveConfiguration()
+                        }
+                    ))
+                    .toggleStyle(.checkbox)
+                }
             }
             
-            Section("Display") {
-                Toggle("Word Wrap", isOn: Binding(
-                    get: { configManager.configuration.editor?.wordWrap ?? true },
-                    set: { newValue in
-                        ensureEditorConfig()
-                        configManager.configuration.editor?.wordWrap = newValue
-                        configManager.saveConfiguration()
+            SettingsSection("Display") {
+                SettingRow("") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Word wrap", isOn: Binding(
+                            get: { configManager.configuration.editor?.wordWrap ?? true },
+                            set: { newValue in
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.wordWrap = newValue
+                                configManager.saveConfiguration()
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
+                        
+                        Toggle("Show line numbers", isOn: Binding(
+                            get: { configManager.configuration.editor?.showLineNumbers ?? true },
+                            set: { newValue in
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.showLineNumbers = newValue
+                                configManager.saveConfiguration()
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
                     }
-                ))
-                
-                Toggle("Show Line Numbers", isOn: Binding(
-                    get: { configManager.configuration.editor?.showLineNumbers ?? true },
-                    set: { newValue in
-                        ensureEditorConfig()
-                        configManager.configuration.editor?.showLineNumbers = newValue
-                        configManager.saveConfiguration()
-                    }
-                ))
+                }
             }
+            
+            Spacer()
         }
-        .padding()
+        .padding(20)
     }
     
     private func ensureEditorConfig() {
@@ -279,48 +427,59 @@ struct EditorSettingsView: View {
     }
 }
 
+// MARK: - Vim Settings
+
 struct VimSettingsView: View {
     @EnvironmentObject var configManager: ConfigurationManager
     
     var body: some View {
-        Form {
-            Section("Vim Mode") {
-                Toggle("Enable Vim Mode by Default", isOn: Binding(
-                    get: { configManager.configuration.vimMode?.enabled ?? true },
-                    set: { newValue in
-                        ensureVimConfig()
-                        configManager.configuration.vimMode?.enabled = newValue
-                        configManager.saveConfiguration()
-                        NotificationCenter.default.post(name: .vimModeChanged, object: newValue)
-                    }
-                ))
-                
-                Text("When enabled, the editor uses Vim keybindings. Toggle at any time with Cmd+Shift+V.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsSection("Vim Mode") {
+                SettingRow("") {
+                    Toggle("Enable Vim mode", isOn: Binding(
+                        get: { configManager.configuration.vimMode?.enabled ?? true },
+                        set: { newValue in
+                            ensureVimConfig()
+                            configManager.configuration.vimMode?.enabled = newValue
+                            configManager.saveConfiguration()
+                            NotificationCenter.default.post(name: .vimModeChanged, object: newValue)
+                        }
+                    ))
+                    .toggleStyle(.checkbox)
+                }
+                SettingHint(text: "Toggle at runtime with Cmd+Shift+V. Pane navigation (Ctrl-w) works regardless.")
             }
             
-            Section("Cursor") {
-                Toggle("Cursor Blink", isOn: Binding(
-                    get: { configManager.configuration.vimMode?.cursorBlink ?? true },
-                    set: { newValue in
-                        ensureVimConfig()
-                        configManager.configuration.vimMode?.cursorBlink = newValue
-                        configManager.saveConfiguration()
+            SettingsSection("Cursor") {
+                SettingRow("") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Cursor blink", isOn: Binding(
+                            get: { configManager.configuration.vimMode?.cursorBlink ?? true },
+                            set: { newValue in
+                                ensureVimConfig()
+                                configManager.configuration.vimMode?.cursorBlink = newValue
+                                configManager.saveConfiguration()
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
+                        
+                        Toggle("Relative line numbers", isOn: Binding(
+                            get: { configManager.configuration.vimMode?.relativeLineNumbers ?? false },
+                            set: { newValue in
+                                ensureVimConfig()
+                                configManager.configuration.vimMode?.relativeLineNumbers = newValue
+                                configManager.saveConfiguration()
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
                     }
-                ))
-                
-                Toggle("Relative Line Numbers", isOn: Binding(
-                    get: { configManager.configuration.vimMode?.relativeLineNumbers ?? false },
-                    set: { newValue in
-                        ensureVimConfig()
-                        configManager.configuration.vimMode?.relativeLineNumbers = newValue
-                        configManager.saveConfiguration()
-                    }
-                ))
+                }
+                SettingHint(text: "Normal mode uses a block cursor. Insert mode uses a line cursor.")
             }
+            
+            Spacer()
         }
-        .padding()
+        .padding(20)
     }
     
     private func ensureVimConfig() {
@@ -330,61 +489,74 @@ struct VimSettingsView: View {
     }
 }
 
+// MARK: - Autocomplete Settings
+
 struct AutocompleteSettingsView: View {
     @EnvironmentObject var configManager: ConfigurationManager
     
+    private var currentMode: AutocompleteMode {
+        configManager.configuration.editor?.autocompleteMode ?? .ruleBased
+    }
+    
     var body: some View {
-        Form {
-            Section("Autocomplete Mode") {
-                Picker("Mode", selection: Binding(
-                    get: { configManager.configuration.editor?.autocompleteMode ?? .ruleBased },
-                    set: { newValue in
-                        ensureEditorConfig()
-                        configManager.configuration.editor?.autocompleteMode = newValue
-                        configManager.saveConfiguration()
-                    }
-                )) {
-                    ForEach(AutocompleteMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                
-                Text(configManager.configuration.editor?.autocompleteMode.description ?? AutocompleteMode.ruleBased.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            
-            if configManager.configuration.editor?.autocompleteMode == .openAI {
-                Section("OpenAI") {
-                    SecureField("API Key", text: Binding(
-                        get: { configManager.configuration.editor?.openAIApiKey ?? "" },
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsSection("Mode") {
+                SettingRow("Engine") {
+                    Picker("", selection: Binding(
+                        get: { currentMode },
                         set: { newValue in
                             ensureEditorConfig()
-                            configManager.configuration.editor?.openAIApiKey = newValue
+                            configManager.configuration.editor?.autocompleteMode = newValue
                             configManager.saveConfiguration()
                         }
-                    ))
-                    .textFieldStyle(.roundedBorder)
+                    )) {
+                        ForEach(AutocompleteMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 240)
+                }
+                SettingHint(text: currentMode.description)
+            }
+            
+            if currentMode == .openAI {
+                SettingsSection("OpenAI") {
+                    SettingRow("API Key") {
+                        SecureField("sk-...", text: Binding(
+                            get: { configManager.configuration.editor?.openAIApiKey ?? "" },
+                            set: { newValue in
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.openAIApiKey = newValue
+                                configManager.saveConfiguration()
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 280)
+                    }
                 }
             }
             
-            if configManager.configuration.editor?.autocompleteMode == .anthropic {
-                Section("Anthropic") {
-                    SecureField("API Key", text: Binding(
-                        get: { configManager.configuration.editor?.anthropicApiKey ?? "" },
-                        set: { newValue in
-                            ensureEditorConfig()
-                            configManager.configuration.editor?.anthropicApiKey = newValue
-                            configManager.saveConfiguration()
-                        }
-                    ))
-                    .textFieldStyle(.roundedBorder)
+            if currentMode == .anthropic {
+                SettingsSection("Anthropic") {
+                    SettingRow("API Key") {
+                        SecureField("sk-ant-...", text: Binding(
+                            get: { configManager.configuration.editor?.anthropicApiKey ?? "" },
+                            set: { newValue in
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.anthropicApiKey = newValue
+                                configManager.saveConfiguration()
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 280)
+                    }
                 }
             }
+            
+            Spacer()
         }
-        .padding()
+        .padding(20)
     }
     
     private func ensureEditorConfig() {
@@ -399,7 +571,6 @@ extension Notification.Name {
     static let executeQuery = Notification.Name("executeQuery")
     static let executeSelectedQuery = Notification.Name("executeSelectedQuery")
     static let cancelQuery = Notification.Name("cancelQuery")
-    static let openExternalEditor = Notification.Name("openExternalEditor")
     static let toggleVimMode = Notification.Name("toggleVimMode")
     static let zoomIn = Notification.Name("zoomIn")
     static let zoomOut = Notification.Name("zoomOut")

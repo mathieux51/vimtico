@@ -47,6 +47,7 @@ struct ResultsTableView: View {
                     theme: themeManager.currentTheme,
                     fontSize: resultsFontSize,
                     selectedRow: viewModel.selectedSchemaRow,
+                    selectedColumn: viewModel.selectedResultColumn,
                     isFocused: viewModel.focusedPane == .results
                 )
             } else {
@@ -169,7 +170,7 @@ struct HeaderRow: View {
                     .frame(width: index < columnWidths.count ? columnWidths[index] : 100, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .background(selectedColumn == index ? theme.editorSelectionColor.opacity(0.3) : Color.clear)
+                    .background(selectedColumn == index ? theme.accentColor.opacity(0.25) : Color.clear)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         NSPasteboard.general.clearContents()
@@ -215,9 +216,15 @@ struct ResultRow: View {
                     .padding(.vertical, 4)
                     .lineLimit(1)
                     .background(
-                        isCellSelected ? theme.editorSelectionColor.opacity(0.7) :
+                        isCellSelected ? theme.accentColor.opacity(0.35) :
                         (isSelected ? theme.editorSelectionColor.opacity(0.15) :
                         Color.clear)
+                    )
+                    .overlay(
+                        isCellSelected ?
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(theme.accentColor.opacity(0.8), lineWidth: 2)
+                        : nil
                     )
                     .contentShape(Rectangle())
                     .id("cell-\(rowIndex)-\(index)")
@@ -237,7 +244,7 @@ struct ResultRow: View {
             }
         }
         .background(
-            isSelected ? theme.editorSelectionColor.opacity(0.1) :
+            isSelected ? theme.editorSelectionColor.opacity(0.15) :
             (isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor)
         )
     }
@@ -344,6 +351,7 @@ struct TableInfoView: View {
     let theme: Theme
     let fontSize: CGFloat
     var selectedRow: Int? = nil
+    var selectedColumn: Int = 0
     var isFocused: Bool = false
     
     private var displayColumns: [DatabaseColumn] {
@@ -404,6 +412,7 @@ struct TableInfoView: View {
                 theme: theme,
                 fontSize: fontSize,
                 selectedRow: selectedRow,
+                selectedColumn: selectedColumn,
                 isFocused: isFocused
             )
             

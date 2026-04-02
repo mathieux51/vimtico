@@ -38,28 +38,74 @@ struct KeybindingsView: View {
                         ("i", "Enter insert mode"),
                         ("a", "Append after cursor"),
                         ("A", "Append at end of line"),
-                        ("I", "Insert at start of line"),
+                        ("I", "Insert at first non-blank"),
                         ("o", "Open line below"),
                         ("O", "Open line above"),
+                        ("s", "Substitute char (delete + insert)"),
+                        ("S / cc", "Substitute entire line"),
+                        ("C", "Change to end of line"),
                         ("v", "Enter visual mode"),
                         ("V", "Enter visual line mode"),
                         (":", "Enter command mode"),
                         ("Return", "Execute query"),
                         ("Esc", "Cancel running query"),
-                        ("e", "Open external editor ($EDITOR)"),
+                    ])
+                    
+                    keybindingSection("Vim - Movement", bindings: [
                         ("h / j / k / l", "Move left / down / up / right"),
-                        ("w", "Move word forward"),
-                        ("b", "Move word backward"),
+                        ("w / b", "Word forward / backward"),
+                        ("e", "Move to end of word"),
+                        ("W / B", "WORD forward / backward"),
+                        ("E", "Move to end of WORD"),
                         ("0", "Move to start of line"),
                         ("$", "Move to end of line"),
                         ("^", "Move to first non-blank"),
                         ("gg", "Move to start of document"),
                         ("G", "Move to end of document"),
-                        ("dd", "Delete line"),
+                        ("{count}G", "Go to line number"),
+                        ("f{char}", "Find char forward on line"),
+                        ("F{char}", "Find char backward on line"),
+                        ("t{char}", "Till char forward on line"),
+                        ("T{char}", "Till char backward on line"),
+                        ("; / ,", "Repeat / reverse last f/F/t/T"),
+                        ("%", "Jump to matching bracket"),
+                        ("{ / }", "Paragraph backward / forward"),
+                        ("H / M / L", "Screen top / middle / bottom"),
+                        ("Ctrl + D / U", "Half page down / up"),
+                        ("Ctrl + F / B", "Full page down / up"),
+                    ])
+                    
+                    keybindingSection("Vim - Editing", bindings: [
+                        ("x", "Delete char under cursor"),
+                        ("X", "Delete char before cursor"),
+                        ("r{char}", "Replace char under cursor"),
+                        ("~", "Toggle case of char"),
+                        ("D", "Delete to end of line"),
+                        ("J", "Join current line with next"),
+                        ("dd", "Delete entire line"),
                         ("yy", "Yank (copy) line"),
-                        ("p", "Paste"),
+                        ("p / P", "Paste after / before cursor"),
                         ("u", "Undo"),
                         ("Ctrl + R", "Redo"),
+                        (".", "Repeat last edit"),
+                    ])
+                    
+                    keybindingSection("Vim - Operators + Motions", bindings: [
+                        ("d{motion}", "Delete (e.g. dw, de, d$, dG)"),
+                        ("c{motion}", "Change (e.g. cw, ce, c$, cG)"),
+                        ("y{motion}", "Yank (e.g. yw, ye, y$, yG)"),
+                        ("df{char}", "Delete to char (inclusive)"),
+                        ("dt{char}", "Delete till char"),
+                        ("cf{char} / ct{char}", "Change to/till char"),
+                    ])
+                    
+                    keybindingSection("Vim - Text Objects", bindings: [
+                        ("diw / daw", "Delete inner/around word"),
+                        ("ciw / caw", "Change inner/around word"),
+                        ("di\" / da\"", "Delete inner/around quotes"),
+                        ("di( / da(", "Delete inner/around parens"),
+                        ("di{ / da{", "Delete inner/around braces"),
+                        ("di[ / da[", "Delete inner/around brackets"),
                     ])
                     
                     keybindingSection("Vim - Insert Mode", bindings: [
@@ -71,8 +117,11 @@ struct KeybindingsView: View {
                         ("Esc", "Return to normal mode"),
                         ("Return", "Execute selected text"),
                         ("d / x", "Delete selection"),
+                        ("c", "Change selection"),
                         ("y", "Yank (copy) selection"),
-                        ("h / j / k / l", "Extend selection"),
+                        ("~", "Toggle case of selection"),
+                        ("J", "Join selected lines"),
+                        ("All motions", "Extend selection"),
                     ])
                     
                     keybindingSection("Pane Navigation", bindings: [
@@ -84,9 +133,12 @@ struct KeybindingsView: View {
                     
                     keybindingSection("Results Pane (when focused)", bindings: [
                         ("j / k", "Move selection down / up"),
+                        ("h / l", "Move column left / right"),
                         ("g", "Jump to first row"),
                         ("G", "Jump to last row"),
-                        ("y", "Copy selected row"),
+                        ("0 / $", "Jump to first / last column"),
+                        ("y", "Copy selected cell value"),
+                        ("/", "Filter results"),
                     ])
                     
                     keybindingSection("Sidebar (when focused)", bindings: [
@@ -94,6 +146,8 @@ struct KeybindingsView: View {
                         ("g", "Jump to first table"),
                         ("G", "Jump to last table"),
                         ("Return", "Show table schema info"),
+                        ("y", "Copy table name"),
+                        ("/", "Filter tables"),
                     ])
                     
                     keybindingSection("Autocomplete", bindings: [
@@ -106,7 +160,7 @@ struct KeybindingsView: View {
                 .padding()
             }
         }
-        .frame(minWidth: 600, idealWidth: 680, minHeight: 650, idealHeight: 780)
+        .frame(minWidth: 600, idealWidth: 700, minHeight: 700, idealHeight: 850)
         .background(themeManager.currentTheme.backgroundColor)
         .foregroundColor(themeManager.currentTheme.foregroundColor)
     }

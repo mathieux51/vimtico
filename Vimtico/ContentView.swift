@@ -231,6 +231,8 @@ struct ContentView: View {
         else if viewModel.tableInfo != nil {
             let columns = viewModel.filteredSchemaRows ?? viewModel.tableInfo!.columns
             let rowCount = columns.count
+            // Schema table has 5 columns: column, type, nullable, default, pk
+            let schemaColCount = 5
             if rowCount > 0 {
                 switch chars {
                 case "j":
@@ -239,6 +241,16 @@ struct ContentView: View {
                 case "k":
                     let current = viewModel.selectedSchemaRow ?? 0
                     viewModel.selectedSchemaRow = max(current - 1, 0)
+                case "h":
+                    if viewModel.selectedSchemaRow == nil { viewModel.selectedSchemaRow = 0 }
+                    viewModel.selectedResultColumn = max(viewModel.selectedResultColumn - 1, 0)
+                case "l":
+                    if viewModel.selectedSchemaRow == nil { viewModel.selectedSchemaRow = 0 }
+                    viewModel.selectedResultColumn = min(viewModel.selectedResultColumn + 1, schemaColCount - 1)
+                case "0":
+                    viewModel.selectedResultColumn = 0
+                case "$":
+                    viewModel.selectedResultColumn = schemaColCount - 1
                 case "g":
                     viewModel.selectedSchemaRow = 0
                 case "G":
@@ -246,7 +258,9 @@ struct ContentView: View {
                 case "y":
                     if let row = viewModel.selectedSchemaRow, row < columns.count {
                         let col = columns[row]
-                        let text = "\(col.name)\t\(col.dataType)"
+                        let cellValues = [col.name, col.dataType, col.isNullable ? "yes" : "no", col.defaultValue ?? "", col.isPrimaryKey ? "yes" : ""]
+                        let colIdx = viewModel.selectedResultColumn
+                        let text = colIdx < cellValues.count ? cellValues[colIdx] : col.name
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(text, forType: .string)
                     }
