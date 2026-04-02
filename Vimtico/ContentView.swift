@@ -79,10 +79,17 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .editorBecameFirstResponder)) { _ in
             viewModel.focusedPane = .editor
         }
+        .onReceive(NotificationCenter.default.publisher(for: .fontSizeChanged)) { notification in
+            if let size = notification.object as? Int {
+                viewModel.fontSize = CGFloat(size)
+            }
+        }
         .onAppear {
             if configManager.configuration.vimMode?.enabled ?? true {
                 viewModel.vimModeEnabled = true
             }
+            // Apply saved font size from config
+            viewModel.fontSize = CGFloat(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)
             // Auto-connect to last used database
             viewModel.autoConnectIfPossible()
             viewModel.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -286,6 +293,12 @@ struct ContentView: View {
                 if viewModel.selectedTableIndex < tableCount {
                     let table = filteredTables[viewModel.selectedTableIndex]
                     viewModel.selectTable(table)
+                }
+            case "y":
+                if viewModel.selectedTableIndex < tableCount {
+                    let table = filteredTables[viewModel.selectedTableIndex]
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(table.name, forType: .string)
                 }
             default:
                 break

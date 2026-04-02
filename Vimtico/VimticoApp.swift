@@ -198,21 +198,6 @@ struct EditorSettingsView: View {
         Form {
             Section("Font") {
                 HStack {
-                    Text("Family")
-                    Spacer()
-                    TextField("Font Family", text: Binding(
-                        get: { configManager.configuration.editor?.fontFamily ?? "SF Mono" },
-                        set: { newValue in
-                            ensureEditorConfig()
-                            configManager.configuration.editor?.fontFamily = newValue
-                            configManager.saveConfiguration()
-                        }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
-                }
-                
-                HStack {
                     Text("Size: \(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)")
                         .font(.system(.body, design: .monospaced))
                     
