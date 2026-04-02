@@ -4,6 +4,11 @@ struct ResultsTableView: View {
     @ObservedObject var viewModel: DatabaseViewModel
     @EnvironmentObject var themeManager: ThemeManager
     
+    /// Font size for the results area is slightly smaller than the editor.
+    private var resultsFontSize: CGFloat {
+        max(viewModel.fontSize - 2, 10)
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             if viewModel.isLoading {
@@ -11,27 +16,28 @@ struct ResultsTableView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let result = viewModel.queryResult {
                 if let error = result.error {
-                    ErrorView(message: error, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
+                    ErrorView(message: error, theme: themeManager.currentTheme, fontSize: resultsFontSize)
                 } else if result.columns.isEmpty {
-                    SuccessView(message: result.summary, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
+                    SuccessView(message: result.summary, theme: themeManager.currentTheme, fontSize: resultsFontSize)
                 } else {
                     ResultsTable(
                         result: result,
                         theme: themeManager.currentTheme,
-                        fontSize: viewModel.fontSize,
+                        fontSize: resultsFontSize,
                         selectedRow: viewModel.selectedResultRow,
                         isFocused: viewModel.focusedPane == .results
                     )
                 }
                 
                 // Status bar
-                StatusBar(result: result, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
+                StatusBar(result: result, theme: themeManager.currentTheme, fontSize: resultsFontSize)
             } else if let info = viewModel.tableInfo {
-                TableInfoView(info: info, theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
+                TableInfoView(info: info, theme: themeManager.currentTheme, fontSize: resultsFontSize)
             } else {
-                EmptyStateView(theme: themeManager.currentTheme, fontSize: viewModel.fontSize)
+                EmptyStateView(theme: themeManager.currentTheme, fontSize: resultsFontSize)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(themeManager.currentTheme.backgroundColor)
     }
 }

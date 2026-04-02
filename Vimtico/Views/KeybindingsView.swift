@@ -26,6 +26,7 @@ struct KeybindingsView: View {
                     keybindingSection("Global", bindings: [
                         ("Cmd + Return", "Execute query"),
                         ("Cmd + N", "New connection"),
+                        ("Cmd + R", "Reconnect to database"),
                         ("Cmd + Shift + V", "Toggle vim mode"),
                         ("Cmd + +", "Zoom in"),
                         ("Cmd + -", "Zoom out"),

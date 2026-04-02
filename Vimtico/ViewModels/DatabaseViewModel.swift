@@ -202,6 +202,24 @@ class DatabaseViewModel: ObservableObject {
         queryResult = nil
     }
     
+    /// Reconnects to the current database (Cmd+R).
+    /// Disconnects and then reconnects to the same connection.
+    func reconnect() {
+        guard let connection = connectedConnection else {
+            errorMessage = "No active connection to reconnect"
+            return
+        }
+        Task {
+            await postgresService.disconnect()
+            isConnected = false
+            tables = []
+            selectedTable = nil
+            queryResult = nil
+            tableInfo = nil
+            await connect(to: connection)
+        }
+    }
+    
     // MARK: - Query Execution
     
     func executeQuery() {

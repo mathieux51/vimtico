@@ -353,51 +353,131 @@ func extractPostgresErrorMessage(_ error: Error) -> String {
 }
 
 /// Cleans up raw PSQLError descriptions into user-friendly messages.
+///
+/// String(reflecting:) on PSQLError produces output in the format:
+///   `code: server, serverInfo: [sqlState: 42601, file: scan.l, line: 1184,
+///    message: syntax error at end of input, position: 34, routine: scanner_yyerror,
+///    localizedSeverity: ERROR, severity: ERROR], triggeredFromRequestInFile: ...,
+///    query: PostgresQuery(sql: ..., binds: [])`
+///
+/// The values are NOT quoted. They are comma-separated key-value pairs inside
+/// a Swift dictionary description (square brackets). We extract the useful fields:
+/// message, detail, hint, sqlState.
 private func cleanupErrorDescription(_ raw: String) -> String {
-    var message = raw
-    
-    // Remove the "PSQLError(...)" wrapper if present
-    if message.hasPrefix("PSQLError(") {
-        message = String(message.dropFirst("PSQLError(".count))
-        if message.hasSuffix(")") {
-            message = String(message.dropLast())
+    // Try to extract the serverInfo block: `serverInfo: [...]`
+    if let serverInfoRange = raw.range(of: "serverInfo: [") {
+        let afterOpen = serverInfoRange.upperBound
+        // Find the matching closing bracket
+        if let closingBracket = findMatchingBracket(in: raw, from: afterOpen) {
+            let serverInfoContent = String(raw[afterOpen..<closingBracket])
+            let fields = parseServerInfoFields(serverInfoContent)
+            
+            var parts: [String] = []
+            
+            if let msg = fields["message"], !msg.isEmpty {
+                parts.append(msg)
+            }
+            
+            if let detail = fields["detail"], !detail.isEmpty {
+                parts.append("Detail: \(detail)")
+            }
+            
+            if let hint = fields["hint"], !hint.isEmpty {
+                parts.append("Hint: \(hint)")
+            }
+            
+            if let sqlState = fields["sqlState"], !sqlState.isEmpty, !parts.isEmpty {
+                parts[parts.count - 1] += " (SQLSTATE \(sqlState))"
+            }
+            
+            if !parts.isEmpty {
+                return parts.joined(separator: ". ")
+            }
         }
     }
     
-    // Extract key fields if present in structured format
-    var parts: [String] = []
-    
-    // Look for serverInfo fields: message, detail, hint, code
-    if let msgRange = message.range(of: "message: \"") {
-        let start = msgRange.upperBound
-        if let endQuote = message[start...].firstIndex(of: "\"") {
-            parts.append(String(message[start..<endQuote]))
+    // Fallback: return trimmed raw description
+    if raw.count > 500 {
+        return String(raw.prefix(500)) + "..."
+    }
+    return raw
+}
+
+/// Finds the closing `]` that matches the opening bracket position.
+private func findMatchingBracket(in str: String, from start: String.Index) -> String.Index? {
+    var depth = 1
+    var index = start
+    while index < str.endIndex {
+        let ch = str[index]
+        if ch == "[" {
+            depth += 1
+        } else if ch == "]" {
+            depth -= 1
+            if depth == 0 {
+                return index
+            }
         }
+        index = str.index(after: index)
     }
+    return nil
+}
+
+/// Parses the content inside `serverInfo: [...]` into a dictionary of key-value pairs.
+///
+/// The format is: `key1: value1, key2: value2, ...`
+/// Values are NOT quoted and may contain colons (e.g. file paths), so we split
+/// on `, ` followed by a known key name to avoid splitting inside values.
+private func parseServerInfoFields(_ content: String) -> [String: String] {
+    let knownKeys = ["sqlState", "file", "line", "message", "detail", "hint",
+                     "position", "routine", "localizedSeverity", "severity",
+                     "internalPosition", "internalQuery", "where", "schema",
+                     "table", "column", "dataType", "constraint"]
     
-    if let detailRange = message.range(of: "detail: \"") {
-        let start = detailRange.upperBound
-        if let endQuote = message[start...].firstIndex(of: "\"") {
-            parts.append("Detail: \(message[start..<endQuote])")
+    var fields: [String: String] = [:]
+    
+    // Build a regex-like split: find all occurrences of ", knownKey: "
+    // and use them as delimiters to extract key-value pairs.
+    var remaining = content.trimmingCharacters(in: .whitespaces)
+    
+    while !remaining.isEmpty {
+        // Find the current key
+        guard let colonRange = remaining.range(of: ": ") else {
+            break
         }
-    }
-    
-    if let hintRange = message.range(of: "hint: \"") {
-        let start = hintRange.upperBound
-        if let endQuote = message[start...].firstIndex(of: "\"") {
-            parts.append("Hint: \(message[start..<endQuote])")
+        let key = remaining[remaining.startIndex..<colonRange.lowerBound]
+            .trimmingCharacters(in: .whitespaces)
+        remaining = String(remaining[colonRange.upperBound...])
+        
+        // Find the next known key delimiter: ", knownKey: "
+        var nextKeyStart: String.Index? = nil
+        var nextKeyPrefixLength = 0
+        
+        for knownKey in knownKeys {
+            let delimiter = ", \(knownKey): "
+            if let range = remaining.range(of: delimiter) {
+                if nextKeyStart == nil || range.lowerBound < nextKeyStart! {
+                    nextKeyStart = range.lowerBound
+                    nextKeyPrefixLength = delimiter.count
+                }
+            }
         }
+        
+        let value: String
+        if let cutoff = nextKeyStart {
+            value = String(remaining[remaining.startIndex..<cutoff])
+                .trimmingCharacters(in: .whitespaces)
+            let advanceBy = remaining.distance(from: remaining.startIndex, to: cutoff) + nextKeyPrefixLength
+            // Move past the ", " but keep the "key: " part for the next iteration
+            let nextStart = remaining.index(cutoff, offsetBy: 2) // skip ", "
+            remaining = String(remaining[nextStart...])
+        } else {
+            // Last field
+            value = remaining.trimmingCharacters(in: .whitespaces)
+            remaining = ""
+        }
+        
+        fields[key] = value
     }
     
-    if !parts.isEmpty {
-        return parts.joined(separator: ". ")
-    }
-    
-    // If we couldn't parse structured fields, return the cleaned-up raw description.
-    // Trim to a reasonable length for display.
-    if message.count > 500 {
-        return String(message.prefix(500)) + "..."
-    }
-    
-    return message
+    return fields
 }

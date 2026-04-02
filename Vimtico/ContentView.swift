@@ -50,6 +50,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showKeybindings)) { _ in
             showingKeybindings = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .reconnect)) { _ in
+            viewModel.reconnect()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .focusPane)) { notification in
             if let pane = notification.object as? FocusPane {
                 viewModel.focusedPane = pane

@@ -48,6 +48,12 @@ struct VimticoApp: App {
                 
                 Divider()
             }
+            CommandMenu("Database") {
+                Button("Reconnect") {
+                    NotificationCenter.default.post(name: .reconnect, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+            }
             CommandMenu("Vim") {
                 Button("Toggle Vim Mode") {
                     NotificationCenter.default.post(name: .toggleVimMode, object: nil)
@@ -201,4 +207,5 @@ extension Notification.Name {
     static let zoomReset = Notification.Name("zoomReset")
     static let focusPane = Notification.Name("focusPane")
     static let showKeybindings = Notification.Name("showKeybindings")
+    static let reconnect = Notification.Name("reconnect")
 }
