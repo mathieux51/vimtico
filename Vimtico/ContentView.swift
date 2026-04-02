@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var editorHeight: CGFloat = 250
     @State private var awaitingPaneSwitch = false
+    @State private var showingKeybindings = false
     
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -40,8 +41,15 @@ struct ContentView: View {
         .sheet(isPresented: $showingConnectionSheet) {
             ConnectionFormView(viewModel: viewModel, isPresented: $showingConnectionSheet)
         }
+        .sheet(isPresented: $showingKeybindings) {
+            KeybindingsView(isPresented: $showingKeybindings)
+                .environmentObject(themeManager)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newConnection)) { _ in
             showingConnectionSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showKeybindings)) { _ in
+            showingKeybindings = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusPane)) { notification in
             if let pane = notification.object as? FocusPane {

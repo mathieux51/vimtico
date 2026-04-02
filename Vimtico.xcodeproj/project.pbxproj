@@ -23,6 +23,7 @@
 		A1000014 /* ResultsTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014 /* ResultsTableView.swift */; };
 		A1000015 /* ConnectionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015 /* ConnectionFormView.swift */; };
 		A1000016 /* VimTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000016 /* VimTextEditor.swift */; };
+		A1000022 /* KeybindingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000022 /* KeybindingsView.swift */; };
 		A1000017 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000017 /* ThemeManager.swift */; };
 		A1000018 /* PostgresNIO in Frameworks */ = {isa = PBXBuildFile; productRef = A3000001 /* PostgresNIO */; };
 		A1000019 /* SSHTunnelService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* SSHTunnelService.swift */; };
@@ -47,6 +48,7 @@
 		A2000014 /* ResultsTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultsTableView.swift; sourceTree = "<group>"; };
 		A2000015 /* ConnectionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFormView.swift; sourceTree = "<group>"; };
 		A2000016 /* VimTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimTextEditor.swift; sourceTree = "<group>"; };
+		A2000022 /* KeybindingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindingsView.swift; sourceTree = "<group>"; };
 		A2000017 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		A2000018 /* Vimtico.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Vimtico.entitlements; sourceTree = "<group>"; };
 		A2000019 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -118,6 +120,7 @@
 				A2000014 /* ResultsTableView.swift */,
 				A2000015 /* ConnectionFormView.swift */,
 				A2000016 /* VimTextEditor.swift */,
+				A2000022 /* KeybindingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -256,6 +259,7 @@
 				A1000014 /* ResultsTableView.swift in Sources */,
 				A1000015 /* ConnectionFormView.swift in Sources */,
 				A1000016 /* VimTextEditor.swift in Sources */,
+				A1000022 /* KeybindingsView.swift in Sources */,
 				A1000017 /* ThemeManager.swift in Sources */,
 				A1000019 /* SSHTunnelService.swift in Sources */,
 				A1000020 /* SQLAutocompleteService.swift in Sources */,

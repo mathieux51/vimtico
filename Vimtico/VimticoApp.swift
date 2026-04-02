@@ -54,6 +54,12 @@ struct VimticoApp: App {
                 }
                 .keyboardShortcut("v", modifiers: [.command, .shift])
             }
+            CommandGroup(replacing: .help) {
+                Button("Keybindings") {
+                    NotificationCenter.default.post(name: .showKeybindings, object: nil)
+                }
+                .keyboardShortcut("/", modifiers: [.command])
+            }
         }
         
         Settings {
@@ -127,20 +133,6 @@ struct EditorSettingsView: View {
                         configManager.saveConfiguration()
                     }
                 ))
-            }
-            
-            Section("Font") {
-                TextField("Font Size", value: Binding(
-                    get: { configManager.configuration.editor?.fontSize ?? 14 },
-                    set: { newValue in
-                        if configManager.configuration.editor == nil {
-                            configManager.configuration.editor = EditorConfig(fontSize: newValue)
-                        } else {
-                            configManager.configuration.editor?.fontSize = newValue
-                        }
-                        configManager.saveConfiguration()
-                    }
-                ), format: .number)
             }
             
             Section("SQL Autocomplete") {
@@ -260,4 +252,5 @@ extension Notification.Name {
     static let zoomOut = Notification.Name("zoomOut")
     static let zoomReset = Notification.Name("zoomReset")
     static let focusPane = Notification.Name("focusPane")
+    static let showKeybindings = Notification.Name("showKeybindings")
 }

@@ -208,6 +208,7 @@ struct ErrorView: View {
     let message: String
     let theme: Theme
     let fontSize: CGFloat
+    @State private var copied = false
     
     var body: some View {
         VStack(spacing: 12) {
@@ -219,13 +220,22 @@ struct ErrorView: View {
                 .font(.system(size: fontSize + 2, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.foregroundColor)
             
-            Text(message)
+            Text(copied ? "Copied!" : message)
                 .font(.system(size: fontSize, design: .monospaced))
-                .foregroundColor(theme.errorColor)
+                .foregroundColor(copied ? theme.successColor : theme.errorColor)
                 .multilineTextAlignment(.center)
                 .padding()
                 .background(theme.secondaryBackgroundColor)
                 .cornerRadius(8)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        copied = false
+                    }
+                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

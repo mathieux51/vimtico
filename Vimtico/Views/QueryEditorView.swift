@@ -140,6 +140,11 @@ struct QueryEditorView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 4)
                 .background(themeManager.currentTheme.errorColor.opacity(0.1))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message, forType: .string)
+                }
             }
             
             // Status bar
@@ -199,9 +204,6 @@ struct QueryEditorView: View {
             viewModel.openExternalEditor()
         }
         .onAppear {
-            // Load font size from config
-            viewModel.fontSize = CGFloat(configManager.configuration.editor?.fontSize ?? EditorConfig.defaultFontSize)
-            
             // Configure autocomplete
             let mode = configManager.configuration.editor?.autocompleteMode ?? .ruleBased
             let openAIKey = configManager.configuration.editor?.openAIApiKey

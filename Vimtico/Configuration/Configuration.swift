@@ -37,7 +37,6 @@ struct VimModeConfig: Codable {
 }
 
 struct EditorConfig: Codable {
-    var fontSize: Int
     var fontFamily: String
     var tabSize: Int
     var insertSpaces: Bool
@@ -47,12 +46,12 @@ struct EditorConfig: Codable {
     var openAIApiKey: String?
     var anthropicApiKey: String?
     
+    // Font size is controlled entirely by zoom (Cmd +/-/0)
     static let minFontSize = 8
     static let maxFontSize = 72
     static let defaultFontSize = 14
     
     init(
-        fontSize: Int = 14,
         fontFamily: String = "SF Mono",
         tabSize: Int = 4,
         insertSpaces: Bool = true,
@@ -62,7 +61,6 @@ struct EditorConfig: Codable {
         openAIApiKey: String? = nil,
         anthropicApiKey: String? = nil
     ) {
-        self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.tabSize = tabSize
         self.insertSpaces = insertSpaces

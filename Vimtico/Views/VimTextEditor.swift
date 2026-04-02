@@ -259,9 +259,9 @@ class VimEnabledTextView: NSTextView {
             case 125: // Down arrow - move selection down
                 autocompleteCallbacks.onDown?()
                 return
-            case 53: // Escape - dismiss autocomplete
+            case 53: // Escape - dismiss autocomplete, then fall through to vim engine
                 autocompleteCallbacks.onDismiss?()
-                return
+                break
             default:
                 // Dismiss autocomplete for other keys, then process normally
                 autocompleteCallbacks.onDismiss?()
