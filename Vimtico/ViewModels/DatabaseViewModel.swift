@@ -38,9 +38,19 @@ class DatabaseViewModel: ObservableObject {
     
     // Results navigation
     @Published var selectedResultRow: Int? = nil
+    @Published var selectedResultColumn: Int = 0
     
     // Sidebar navigation
     @Published var selectedTableIndex: Int = 0
+    
+    // Filter (/ search) for sidebar and results
+    @Published var sidebarFilterText: String = ""
+    @Published var isSidebarFiltering: Bool = false
+    @Published var resultsFilterText: String = ""
+    @Published var isResultsFiltering: Bool = false
+    
+    // Selected column in results for schema navigation
+    @Published var selectedSchemaRow: Int? = nil
     
     // Pane navigation (Ctrl-w sequence)
     var awaitingPaneSwitch: Bool = false
@@ -67,6 +77,33 @@ class DatabaseViewModel: ObservableObject {
     private let lastConnectionKey = "lastConnectedConnectionId"
     private var runningQueryTask: Task<Void, Never>?
     private var validationTask: Task<Void, Never>?
+    
+    // MARK: - Filtered lists
+    
+    var filteredTables: [DatabaseTable] {
+        guard isSidebarFiltering, !sidebarFilterText.isEmpty else { return tables }
+        return tables.filter { $0.name.localizedCaseInsensitiveContains(sidebarFilterText) }
+    }
+    
+    /// Returns filtered rows for the current query result or schema info.
+    var filteredResultRows: [[String]]? {
+        guard let result = queryResult, !result.columns.isEmpty else { return nil }
+        let rows = result.rows
+        guard isResultsFiltering, !resultsFilterText.isEmpty else { return rows }
+        let filter = resultsFilterText.lowercased()
+        return rows.filter { row in
+            row.contains { $0.lowercased().contains(filter) }
+        }
+    }
+    
+    var filteredSchemaRows: [DatabaseColumn]? {
+        guard let info = tableInfo else { return nil }
+        guard isResultsFiltering, !resultsFilterText.isEmpty else { return info.columns }
+        let filter = resultsFilterText.lowercased()
+        return info.columns.filter {
+            $0.name.lowercased().contains(filter) || $0.dataType.lowercased().contains(filter)
+        }
+    }
     
     init() {
         loadConnections()

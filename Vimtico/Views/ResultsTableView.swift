@@ -20,11 +20,20 @@ struct ResultsTableView: View {
                 } else if result.columns.isEmpty {
                     SuccessView(message: result.summary, theme: themeManager.currentTheme, fontSize: resultsFontSize)
                 } else {
+                    // Use filtered rows if filter is active
+                    let displayRows = viewModel.filteredResultRows ?? result.rows
+                    let filteredResult = QueryResult(
+                        columns: result.columns,
+                        rows: displayRows,
+                        rowsAffected: result.rowsAffected,
+                        executionTime: result.executionTime
+                    )
                     ResultsTable(
-                        result: result,
+                        result: filteredResult,
                         theme: themeManager.currentTheme,
                         fontSize: resultsFontSize,
                         selectedRow: viewModel.selectedResultRow,
+                        selectedColumn: viewModel.selectedResultColumn,
                         isFocused: viewModel.focusedPane == .results
                     )
                 }
@@ -32,12 +41,27 @@ struct ResultsTableView: View {
                 // Status bar
                 StatusBar(result: result, theme: themeManager.currentTheme, fontSize: resultsFontSize)
             } else if let info = viewModel.tableInfo {
-                TableInfoView(info: info, theme: themeManager.currentTheme, fontSize: resultsFontSize)
+                TableInfoView(
+                    info: info,
+                    filteredColumns: viewModel.filteredSchemaRows,
+                    theme: themeManager.currentTheme,
+                    fontSize: resultsFontSize,
+                    selectedRow: viewModel.selectedSchemaRow,
+                    isFocused: viewModel.focusedPane == .results
+                )
             } else {
                 EmptyStateView(theme: themeManager.currentTheme, fontSize: resultsFontSize)
             }
+            
+            if viewModel.isResultsFiltering {
+                FilterBar(
+                    filterText: viewModel.resultsFilterText,
+                    theme: themeManager.currentTheme,
+                    fontSize: resultsFontSize
+                )
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(themeManager.currentTheme.backgroundColor)
     }
 }
@@ -47,6 +71,7 @@ struct ResultsTable: View {
     let theme: Theme
     let fontSize: CGFloat
     var selectedRow: Int? = nil
+    var selectedColumn: Int = 0
     var isFocused: Bool = false
     
     /// Compute a fixed width per column based on the longest value (header or data).
@@ -70,31 +95,41 @@ struct ResultsTable: View {
     
     var body: some View {
         let widths = columnWidths
-        ScrollViewReader { proxy in
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        ForEach(Array(result.rows.enumerated()), id: \.offset) { index, row in
-                            ResultRow(
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(Array(result.rows.enumerated()), id: \.offset) { index, row in
+                                ResultRow(
+                                    columns: result.columns,
+                                    values: row,
+                                    columnWidths: widths,
+                                    isAlternate: index % 2 == 1,
+                                    isSelected: isFocused && selectedRow == index,
+                                    selectedColumn: isFocused ? selectedColumn : nil,
+                                    theme: theme,
+                                    fontSize: fontSize
+                                )
+                                .id(index)
+                            }
+                        } header: {
+                            HeaderRow(
                                 columns: result.columns,
-                                values: row,
                                 columnWidths: widths,
-                                isAlternate: index % 2 == 1,
-                                isSelected: isFocused && selectedRow == index,
                                 theme: theme,
-                                fontSize: fontSize
+                                fontSize: fontSize,
+                                selectedColumn: isFocused ? selectedColumn : nil
                             )
-                            .id(index)
                         }
-                    } header: {
-                        HeaderRow(columns: result.columns, columnWidths: widths, theme: theme, fontSize: fontSize)
                     }
+                    .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
                 }
-            }
-            .onChange(of: selectedRow) { _, newRow in
-                if let row = newRow {
-                    withAnimation(.easeInOut(duration: 0.1)) {
-                        proxy.scrollTo(row, anchor: .center)
+                .onChange(of: selectedRow) { _, newRow in
+                    if let row = newRow {
+                        withAnimation(.easeInOut(duration: 0.1)) {
+                            proxy.scrollTo(row, anchor: .center)
+                        }
                     }
                 }
             }
@@ -107,6 +142,7 @@ struct HeaderRow: View {
     let columnWidths: [CGFloat]
     let theme: Theme
     let fontSize: CGFloat
+    var selectedColumn: Int? = nil
     @State private var copiedIndex: Int? = nil
     
     var body: some View {
@@ -118,6 +154,7 @@ struct HeaderRow: View {
                     .frame(width: index < columnWidths.count ? columnWidths[index] : 100, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
+                    .background(selectedColumn == index ? theme.editorSelectionColor.opacity(0.3) : Color.clear)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         NSPasteboard.general.clearContents()
@@ -144,6 +181,7 @@ struct ResultRow: View {
     let columnWidths: [CGFloat]
     let isAlternate: Bool
     var isSelected: Bool = false
+    var selectedColumn: Int? = nil
     let theme: Theme
     let fontSize: CGFloat
     @State private var copiedIndex: Int? = nil
@@ -152,6 +190,7 @@ struct ResultRow: View {
         HStack(spacing: 0) {
             ForEach(Array(columns.enumerated()), id: \.offset) { index, _ in
                 let value = index < values.count ? values[index] : ""
+                let isCellSelected = isSelected && selectedColumn == index
                 Text(copiedIndex == index ? "Copied!" : value)
                     .font(.system(size: fontSize, design: .monospaced))
                     .foregroundColor(copiedIndex == index ? theme.successColor : (value == "NULL" ? theme.commentColor : theme.foregroundColor))
@@ -159,6 +198,7 @@ struct ResultRow: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .lineLimit(1)
+                    .background(isCellSelected ? theme.editorSelectionColor.opacity(0.5) : (selectedColumn == index && isSelected ? theme.editorSelectionColor.opacity(0.2) : Color.clear))
                     .contentShape(Rectangle())
                     .onTapGesture {
                         NSPasteboard.general.clearContents()
@@ -279,8 +319,15 @@ struct SuccessView: View {
 
 struct TableInfoView: View {
     let info: TableSchemaInfo
+    var filteredColumns: [DatabaseColumn]?
     let theme: Theme
     let fontSize: CGFloat
+    var selectedRow: Int? = nil
+    var isFocused: Bool = false
+    
+    private var displayColumns: [DatabaseColumn] {
+        filteredColumns ?? info.columns
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -316,7 +363,7 @@ struct TableInfoView: View {
             
             // Columns table
             let columns = ["column", "type", "nullable", "default", "pk"]
-            let rows: [[String]] = info.columns.map { col in
+            let rows: [[String]] = displayColumns.map { col in
                 [
                     col.name,
                     col.dataType,
@@ -328,16 +375,22 @@ struct TableInfoView: View {
             let schemaResult = QueryResult(
                 columns: columns,
                 rows: rows,
-                rowsAffected: info.columns.count,
+                rowsAffected: displayColumns.count,
                 executionTime: 0
             )
-            ResultsTable(result: schemaResult, theme: theme, fontSize: fontSize)
+            ResultsTable(
+                result: schemaResult,
+                theme: theme,
+                fontSize: fontSize,
+                selectedRow: selectedRow,
+                isFocused: isFocused
+            )
             
             // Footer status
             HStack {
                 Image(systemName: "info.circle.fill")
                     .foregroundColor(theme.keywordColor)
-                Text("\(info.columns.count) columns")
+                Text("\(displayColumns.count) columns")
                     .font(.system(size: max(fontSize - 2, 10), design: .monospaced))
                     .foregroundColor(theme.foregroundColor)
                 Spacer()

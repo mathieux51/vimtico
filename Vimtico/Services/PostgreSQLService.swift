@@ -122,35 +122,11 @@ actor PostgreSQLService {
                 
                 var rowValues: [String] = []
                 for column in row {
-                    // Try typed decoding first, since the extended query protocol
-                    // sends binary data. Raw bytes won't work for types like UUID,
-                    // integers, booleans, dates, etc.
-                    // Date must come before numeric types because PostgreSQL
-                    // timestamps are stored as Int64 microseconds in binary,
-                    // which could be incorrectly decoded as a number.
-                    if let value = try? column.decode(String.self) {
-                        rowValues.append(value)
-                    } else if let value = try? column.decode(Date.self) {
-                        let formatter = ISO8601DateFormatter()
-                        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                        rowValues.append(formatter.string(from: value))
-                    } else if let value = try? column.decode(UUID.self) {
-                        rowValues.append(value.uuidString.lowercased())
-                    } else if let value = try? column.decode(Bool.self) {
-                        rowValues.append(value ? "true" : "false")
-                    } else if let value = try? column.decode(Int.self) {
-                        rowValues.append(String(value))
-                    } else if let value = try? column.decode(Int64.self) {
-                        rowValues.append(String(value))
-                    } else if let value = try? column.decode(Double.self) {
-                        rowValues.append(String(value))
-                    } else if let value = try? column.decode(Float.self) {
-                        rowValues.append(String(value))
-                    } else if let bytes = column.bytes {
-                        rowValues.append(String(buffer: bytes))
-                    } else {
-                        rowValues.append("NULL")
-                    }
+                    // Route by PostgreSQL data type first for types where the
+                    // binary representation is NOT valid UTF-8 and would
+                    // produce garbage if decoded as String.
+                    let value = decodeCell(column)
+                    rowValues.append(value)
                 }
                 resultRows.append(rowValues)
             }
@@ -165,6 +141,142 @@ actor PostgreSQLService {
         } catch {
             throw PostgresError.queryFailed(extractPostgresErrorMessage(error))
         }
+    }
+    
+    // MARK: - Cell Decoding
+    
+    /// Decodes a PostgresCell into a display string, handling binary-encoded types
+    /// that would produce garbage if naively decoded as String.
+    private func decodeCell(_ column: PostgresCell) -> String {
+        guard column.bytes != nil else { return "NULL" }
+        
+        // For types whose binary format is NOT UTF-8 text, decode specially
+        // BEFORE trying String.self (which has a greedy default case that
+        // interprets any bytes as UTF-8, producing garbage for binary data).
+        switch column.dataType {
+        case .timestamp, .timestamptz, .date:
+            if let value = try? column.decode(Date.self) {
+                if column.dataType == .date {
+                    let f = DateFormatter()
+                    f.dateFormat = "yyyy-MM-dd"
+                    f.timeZone = TimeZone(identifier: "UTC")
+                    return f.string(from: value)
+                } else {
+                    let f = DateFormatter()
+                    f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+                    f.timeZone = TimeZone(identifier: "UTC")
+                    return f.string(from: value)
+                }
+            }
+            
+        case .time, .timetz:
+            // time: Int64 microseconds since midnight
+            // timetz: Int64 microseconds + Int32 tz offset (seconds west of UTC)
+            if var buf = column.bytes {
+                if buf.readableBytes >= 8, let microseconds = buf.readInteger(as: Int64.self) {
+                    let totalSeconds = microseconds / 1_000_000
+                    let hours = totalSeconds / 3600
+                    let minutes = (totalSeconds % 3600) / 60
+                    let seconds = totalSeconds % 60
+                    let frac = microseconds % 1_000_000
+                    var result = String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+                    if frac > 0 {
+                        result += String(format: ".%06d", frac)
+                        // Trim trailing zeros
+                        while result.hasSuffix("0") { result.removeLast() }
+                    }
+                    // timetz has a 4-byte timezone offset
+                    if column.dataType == .timetz, buf.readableBytes >= 4,
+                       let tzOffset = buf.readInteger(as: Int32.self) {
+                        // tzOffset is seconds west of UTC (negative = east)
+                        let tzHours = abs(Int(tzOffset)) / 3600
+                        let tzMinutes = (abs(Int(tzOffset)) % 3600) / 60
+                        let sign = tzOffset <= 0 ? "+" : "-"
+                        result += String(format: "%@%02d", sign, tzHours)
+                        if tzMinutes > 0 {
+                            result += String(format: ":%02d", tzMinutes)
+                        }
+                    }
+                    return result
+                }
+            }
+            
+        case .interval:
+            // interval: Int64 microseconds + Int32 days + Int32 months
+            if var buf = column.bytes, buf.readableBytes >= 16 {
+                if let microseconds = buf.readInteger(as: Int64.self),
+                   let days = buf.readInteger(as: Int32.self),
+                   let months = buf.readInteger(as: Int32.self) {
+                    var parts: [String] = []
+                    let years = months / 12
+                    let remainingMonths = months % 12
+                    if years != 0 { parts.append("\(years) year\(years == 1 ? "" : "s")") }
+                    if remainingMonths != 0 { parts.append("\(remainingMonths) mon\(remainingMonths == 1 ? "" : "s")") }
+                    if days != 0 { parts.append("\(days) day\(days == 1 ? "" : "s")") }
+                    if microseconds != 0 {
+                        let totalSec = abs(microseconds) / 1_000_000
+                        let h = totalSec / 3600
+                        let m = (totalSec % 3600) / 60
+                        let s = totalSec % 60
+                        let sign = microseconds < 0 ? "-" : ""
+                        parts.append(String(format: "%@%02d:%02d:%02d", sign, h, m, s))
+                    }
+                    return parts.isEmpty ? "00:00:00" : parts.joined(separator: " ")
+                }
+            }
+            
+        case .numeric:
+            // numeric/decimal: try Double first, fall back to string
+            if let value = try? column.decode(Double.self) {
+                // Format without trailing zeros
+                let str = String(value)
+                return str.hasSuffix(".0") ? String(str.dropLast(2)) : str
+            }
+            
+        case .bool:
+            if let value = try? column.decode(Bool.self) {
+                return value ? "true" : "false"
+            }
+            
+        case .uuid:
+            if let value = try? column.decode(UUID.self) {
+                return value.uuidString.lowercased()
+            }
+            
+        case .int2:
+            if let value = try? column.decode(Int16.self) { return String(value) }
+        case .int4, .oid:
+            if let value = try? column.decode(Int32.self) { return String(value) }
+        case .int8:
+            if let value = try? column.decode(Int64.self) { return String(value) }
+        case .float4:
+            if let value = try? column.decode(Float.self) { return String(value) }
+        case .float8:
+            if let value = try? column.decode(Double.self) { return String(value) }
+            
+        case .bytea:
+            // Show hex representation for binary data
+            if let buf = column.bytes {
+                let hex = buf.readableBytesView.map { String(format: "%02x", $0) }.joined()
+                return "\\x" + hex
+            }
+            
+        default:
+            break
+        }
+        
+        // For text-like types and anything not handled above, try String
+        if let value = try? column.decode(String.self) {
+            return value
+        }
+        
+        // Final fallback: show hex if there are bytes
+        if let buf = column.bytes {
+            let hex = buf.readableBytesView.map { String(format: "%02x", $0) }.joined()
+            return "\\x" + hex
+        }
+        
+        return "NULL"
     }
     
     func fetchTables() async throws -> [DatabaseTable] {

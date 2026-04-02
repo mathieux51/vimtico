@@ -164,14 +164,29 @@ struct ContentView: View {
     }
     
     private func handleResultsPaneKey(_ event: NSEvent) -> NSEvent? {
-        // Let command/control shortcuts through to the system
+        // Let command shortcuts through to the system
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if mods.contains(.command) || mods.contains(.control) { return event }
+        if mods.contains(.command) { return event }
+        
+        // If filtering, handle text input for filter
+        if viewModel.isResultsFiltering {
+            return handleFilterKey(event, filterText: $viewModel.resultsFilterText, isFiltering: $viewModel.isResultsFiltering)
+        }
         
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
+        // "/" to start filtering
+        if chars == "/" {
+            viewModel.isResultsFiltering = true
+            viewModel.resultsFilterText = ""
+            return nil
+        }
+        
+        // Navigate query results
         if let result = viewModel.queryResult, !result.columns.isEmpty {
-            let rowCount = result.rows.count
+            let rows = viewModel.filteredResultRows ?? result.rows
+            let rowCount = rows.count
+            let colCount = result.columns.count
             if rowCount > 0 {
                 switch chars {
                 case "j":
@@ -180,15 +195,52 @@ struct ContentView: View {
                 case "k":
                     let current = viewModel.selectedResultRow ?? 0
                     viewModel.selectedResultRow = max(current - 1, 0)
+                case "h":
+                    viewModel.selectedResultColumn = max(viewModel.selectedResultColumn - 1, 0)
+                case "l":
+                    viewModel.selectedResultColumn = min(viewModel.selectedResultColumn + 1, colCount - 1)
+                case "0":
+                    viewModel.selectedResultColumn = 0
+                case "$":
+                    viewModel.selectedResultColumn = colCount - 1
                 case "g":
                     viewModel.selectedResultRow = 0
                 case "G":
                     viewModel.selectedResultRow = rowCount - 1
                 case "y":
-                    if let row = viewModel.selectedResultRow, row < result.rows.count {
-                        let rowText = result.rows[row].joined(separator: "\t")
+                    // Copy selected cell if both row and column are selected, otherwise copy full row
+                    if let row = viewModel.selectedResultRow, row < rows.count {
+                        let cellText = rows[row][viewModel.selectedResultColumn]
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(rowText, forType: .string)
+                        NSPasteboard.general.setString(cellText, forType: .string)
+                    }
+                default:
+                    break
+                }
+            }
+        }
+        // Navigate schema info (table info view)
+        else if viewModel.tableInfo != nil {
+            let columns = viewModel.filteredSchemaRows ?? viewModel.tableInfo!.columns
+            let rowCount = columns.count
+            if rowCount > 0 {
+                switch chars {
+                case "j":
+                    let current = viewModel.selectedSchemaRow ?? -1
+                    viewModel.selectedSchemaRow = min(current + 1, rowCount - 1)
+                case "k":
+                    let current = viewModel.selectedSchemaRow ?? 0
+                    viewModel.selectedSchemaRow = max(current - 1, 0)
+                case "g":
+                    viewModel.selectedSchemaRow = 0
+                case "G":
+                    viewModel.selectedSchemaRow = rowCount - 1
+                case "y":
+                    if let row = viewModel.selectedSchemaRow, row < columns.count {
+                        let col = columns[row]
+                        let text = "\(col.name)\t\(col.dataType)"
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
                     }
                 default:
                     break
@@ -200,13 +252,26 @@ struct ContentView: View {
     }
     
     private func handleSidebarPaneKey(_ event: NSEvent) -> NSEvent? {
-        // Let command/control shortcuts through to the system
+        // Let command shortcuts through to the system
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if mods.contains(.command) || mods.contains(.control) { return event }
+        if mods.contains(.command) { return event }
+        
+        // If filtering, handle text input for filter
+        if viewModel.isSidebarFiltering {
+            return handleFilterKey(event, filterText: $viewModel.sidebarFilterText, isFiltering: $viewModel.isSidebarFiltering)
+        }
         
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
-        let tableCount = viewModel.tables.count
+        // "/" to start filtering
+        if chars == "/" {
+            viewModel.isSidebarFiltering = true
+            viewModel.sidebarFilterText = ""
+            return nil
+        }
+        
+        let filteredTables = viewModel.filteredTables
+        let tableCount = filteredTables.count
         if tableCount > 0 {
             switch chars {
             case "j":
@@ -219,7 +284,7 @@ struct ContentView: View {
                 viewModel.selectedTableIndex = tableCount - 1
             case "\r":
                 if viewModel.selectedTableIndex < tableCount {
-                    let table = viewModel.tables[viewModel.selectedTableIndex]
+                    let table = filteredTables[viewModel.selectedTableIndex]
                     viewModel.selectTable(table)
                 }
             default:
@@ -227,6 +292,38 @@ struct ContentView: View {
             }
         }
         // Consume all non-modifier keystrokes to prevent typing in editor
+        return nil
+    }
+    
+    /// Handles key events when a filter field is active.
+    /// Esc or Enter dismisses the filter. Backspace deletes chars. Other keys append to filter text.
+    private func handleFilterKey(_ event: NSEvent, filterText: Binding<String>, isFiltering: Binding<Bool>) -> NSEvent? {
+        let keyCode = event.keyCode
+        
+        // Esc (53) or Enter (36) - dismiss filter
+        if keyCode == 53 || keyCode == 36 {
+            isFiltering.wrappedValue = false
+            return nil
+        }
+        
+        // Backspace (51)
+        if keyCode == 51 {
+            if filterText.wrappedValue.isEmpty {
+                isFiltering.wrappedValue = false
+            } else {
+                filterText.wrappedValue.removeLast()
+            }
+            return nil
+        }
+        
+        // Append typed characters
+        if let chars = event.characters, !chars.isEmpty {
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            // Only append plain characters (no ctrl/cmd combos)
+            if !mods.contains(.command) && !mods.contains(.control) {
+                filterText.wrappedValue.append(chars)
+            }
+        }
         return nil
     }
     

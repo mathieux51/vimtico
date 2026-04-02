@@ -7,58 +7,69 @@ struct SidebarView: View {
     @State private var expandedConnections: Set<UUID> = []
     
     var body: some View {
-        List(selection: $viewModel.selectedConnection) {
-            Section("Connections") {
-                ForEach(viewModel.connections) { connection in
-                    ConnectionRow(
-                        connection: connection,
-                        isConnected: viewModel.connectedConnection?.id == connection.id,
-                        isExpanded: expandedConnections.contains(connection.id),
-                        fontSize: viewModel.fontSize,
-                        onToggle: { toggleExpanded(connection.id) },
-                        onConnect: { Task { await viewModel.connect(to: connection) } },
-                        onDisconnect: { viewModel.disconnect() },
-                        onDelete: { viewModel.deleteConnection(connection) }
-                    )
-                }
-            }
-            
-            if viewModel.isConnected && !viewModel.tables.isEmpty {
-                let allTables = viewModel.tables.filter { $0.type == .table }
-                Section("Tables") {
-                    ForEach(Array(allTables.enumerated()), id: \.element.id) { index, table in
-                        TableRow(
-                            table: table,
-                            isSelected: viewModel.selectedTable?.id == table.id,
-                            isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == index,
-                            fontSize: viewModel.fontSize
+        VStack(spacing: 0) {
+            List(selection: $viewModel.selectedConnection) {
+                Section("Connections") {
+                    ForEach(viewModel.connections) { connection in
+                        ConnectionRow(
+                            connection: connection,
+                            isConnected: viewModel.connectedConnection?.id == connection.id,
+                            isExpanded: expandedConnections.contains(connection.id),
+                            fontSize: viewModel.fontSize,
+                            onToggle: { toggleExpanded(connection.id) },
+                            onConnect: { Task { await viewModel.connect(to: connection) } },
+                            onDisconnect: { viewModel.disconnect() },
+                            onDelete: { viewModel.deleteConnection(connection) }
                         )
-                        .onTapGesture {
-                            viewModel.selectTable(table)
-                        }
                     }
                 }
                 
-                let views = viewModel.tables.filter { $0.type == .view }
-                if !views.isEmpty {
-                    Section("Views") {
-                        ForEach(Array(views.enumerated()), id: \.element.id) { index, view in
-                            let globalIndex = allTables.count + index
+                if viewModel.isConnected && !viewModel.tables.isEmpty {
+                    let filtered = viewModel.filteredTables
+                    let allTables = filtered.filter { $0.type == .table }
+                    Section("Tables") {
+                        ForEach(Array(allTables.enumerated()), id: \.element.id) { index, table in
                             TableRow(
-                                table: view,
-                                isSelected: viewModel.selectedTable?.id == view.id,
-                                isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == globalIndex,
+                                table: table,
+                                isSelected: viewModel.selectedTable?.id == table.id,
+                                isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == index,
                                 fontSize: viewModel.fontSize
                             )
                             .onTapGesture {
-                                viewModel.selectTable(view)
+                                viewModel.selectTable(table)
+                            }
+                        }
+                    }
+                    
+                    let views = filtered.filter { $0.type == .view }
+                    if !views.isEmpty {
+                        Section("Views") {
+                            ForEach(Array(views.enumerated()), id: \.element.id) { index, view in
+                                let globalIndex = allTables.count + index
+                                TableRow(
+                                    table: view,
+                                    isSelected: viewModel.selectedTable?.id == view.id,
+                                    isHighlighted: viewModel.focusedPane == .sidebar && viewModel.selectedTableIndex == globalIndex,
+                                    fontSize: viewModel.fontSize
+                                )
+                                .onTapGesture {
+                                    viewModel.selectTable(view)
+                                }
                             }
                         }
                     }
                 }
             }
+            .listStyle(.sidebar)
+            
+            if viewModel.isSidebarFiltering {
+                FilterBar(
+                    filterText: viewModel.sidebarFilterText,
+                    theme: themeManager.currentTheme,
+                    fontSize: max(viewModel.fontSize - 2, 10)
+                )
+            }
         }
-        .listStyle(.sidebar)
         .frame(minWidth: 200)
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -174,4 +185,32 @@ struct TableRow: View {
 #Preview {
     SidebarView(viewModel: DatabaseViewModel(), showingConnectionSheet: .constant(false))
         .environmentObject(ThemeManager())
+}
+
+/// A small bar showing the current filter text, displayed at the bottom of a pane.
+struct FilterBar: View {
+    let filterText: String
+    let theme: Theme
+    let fontSize: CGFloat
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("/")
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(theme.keywordColor)
+            
+            Text(filterText.isEmpty ? "type to filter..." : filterText)
+                .font(.system(size: fontSize, design: .monospaced))
+                .foregroundColor(filterText.isEmpty ? theme.foregroundColor.opacity(0.4) : theme.foregroundColor)
+            
+            Spacer()
+            
+            Text("esc to close")
+                .font(.system(size: max(fontSize - 2, 9), design: .monospaced))
+                .foregroundColor(theme.foregroundColor.opacity(0.3))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(theme.secondaryBackgroundColor)
+    }
 }
