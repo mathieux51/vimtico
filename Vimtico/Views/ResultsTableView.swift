@@ -4,7 +4,6 @@ struct ResultsTableView: View {
     @ObservedObject var viewModel: DatabaseViewModel
     @EnvironmentObject var themeManager: ThemeManager
     @State private var selectedRows: Set<Int> = []
-    @State private var sortOrder = [KeyPathComparator(\[String].self)]
     
     var body: some View {
         VStack(spacing: 0) {
