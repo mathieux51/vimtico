@@ -274,18 +274,76 @@ class VimEnabledTextView: NSTextView {
         }()
         
         if isNormalOrVisual {
-            // Draw a block cursor for normal/visual mode
-            var blockRect = rect
-            let charWidth = NSString("M").size(withAttributes: [.font: self.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)]).width
-            blockRect.size.width = max(charWidth, 8)
-            
-            if flag {
-                color.withAlphaComponent(0.5).set()
-                blockRect.fill()
-            }
+            // Suppress the system line cursor; we draw our own block in draw(_:)
+            return
         } else {
             super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
         }
+    }
+    
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawBlockCursorIfNeeded()
+    }
+    
+    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if let engine = vimEngine, vimModeEnabledBinding?.wrappedValue == true,
+           engine.mode == .normal {
+            needsDisplay = true
+        }
+    }
+    
+    /// Draws a full-width block cursor at the current insertion point in normal mode.
+    private func drawBlockCursorIfNeeded() {
+        guard let binding = vimModeEnabledBinding, binding.wrappedValue,
+              let engine = vimEngine,
+              engine.mode == .normal else { return }
+        
+        let cursorPos = selectedRange().location
+        let nsString = string as NSString
+        guard let lm = layoutManager, let tc = textContainer else { return }
+        
+        let charWidth = NSString("M").size(withAttributes: [
+            .font: self.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        ]).width
+        
+        var rect: NSRect
+        if cursorPos < nsString.length {
+            let glyphIndex = lm.glyphIndexForCharacter(at: cursorPos)
+            let glyphRange = NSRange(location: glyphIndex, length: 1)
+            rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            rect.origin.x += textContainerOrigin.x
+            rect.origin.y += textContainerOrigin.y
+            // Ensure minimum width (e.g. newline chars have zero width)
+            if rect.size.width < 2 {
+                rect.size.width = charWidth
+            }
+        } else {
+            // Cursor at end of text
+            if nsString.length > 0 {
+                let lastIndex = lm.glyphIndexForCharacter(at: nsString.length - 1)
+                let glyphRange = NSRange(location: lastIndex, length: 1)
+                let lastRect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+                rect = NSRect(
+                    x: lastRect.origin.x + lastRect.size.width + textContainerOrigin.x,
+                    y: lastRect.origin.y + textContainerOrigin.y,
+                    width: charWidth,
+                    height: lastRect.size.height
+                )
+            } else {
+                let lineHeight = (self.font?.pointSize ?? 14) * 1.2
+                rect = NSRect(
+                    x: textContainerOrigin.x,
+                    y: textContainerOrigin.y,
+                    width: charWidth,
+                    height: lineHeight
+                )
+            }
+        }
+        
+        insertionPointColor.withAlphaComponent(0.5).set()
+        rect.fill()
     }
     
     // Need to override to return a wider rect so the block cursor area gets properly invalidated
