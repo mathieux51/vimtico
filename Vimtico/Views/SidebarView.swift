@@ -151,14 +151,14 @@ struct TableRow: View {
         HStack {
             Image(systemName: table.type == .view ? "eye" : "tablecells")
                 .foregroundColor(.secondary)
-                .font(.system(size: fontSize))
+                .font(.system(size: max(fontSize - 2, 10)))
             
             VStack(alignment: .leading) {
                 Text(table.name)
-                    .font(.system(size: fontSize))
+                    .font(.system(size: max(fontSize - 2, 10)))
                 
                 Text(table.schema)
-                    .font(.system(size: max(fontSize - 2, 10)))
+                    .font(.system(size: max(fontSize - 4, 9)))
                     .foregroundColor(.secondary)
             }
         }

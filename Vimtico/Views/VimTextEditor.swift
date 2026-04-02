@@ -54,7 +54,7 @@ struct VimTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize + 4, weight: .regular)
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -107,7 +107,7 @@ struct VimTextEditor: NSViewRepresentable {
         }
         
         // Update font size if changed
-        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize + 4, weight: .regular)
         
         textView.vimModeEnabledBinding = $vimModeEnabled
         textView.isShowingAutocomplete = showingAutocomplete
@@ -142,7 +142,7 @@ struct VimTextEditor: NSViewRepresentable {
         
         // Reset to default color and font
         textStorage.addAttribute(.foregroundColor, value: NSColor(theme.editorForegroundColor), range: fullRange)
-        textStorage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular), range: fullRange)
+        textStorage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: fontSize + 4, weight: .regular), range: fullRange)
         
         let text = textStorage.string
         

@@ -87,21 +87,27 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
             
-            ThemeSettingsView()
-                .tabItem {
-                    Label("Themes", systemImage: "paintpalette")
-                }
-            
             EditorSettingsView()
                 .tabItem {
                     Label("Editor", systemImage: "text.cursor")
                 }
+            
+            VimSettingsView()
+                .tabItem {
+                    Label("Vim", systemImage: "keyboard")
+                }
+            
+            AutocompleteSettingsView()
+                .tabItem {
+                    Label("Autocomplete", systemImage: "sparkles")
+                }
         }
-        .frame(width: 500, height: 450)
+        .frame(width: 620, height: 520)
     }
 }
 
 struct GeneralSettingsView: View {
+    @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var configManager: ConfigurationManager
     @State private var showResetConfirmation = false
     
@@ -112,29 +118,17 @@ struct GeneralSettingsView: View {
     
     var body: some View {
         Form {
-            Section("Configuration File") {
-                HStack {
-                    Text(configFilePath)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    
-                    Spacer()
-                    
-                    Button("Copy Path") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(configFilePath, forType: .string)
-                    }
-                    
-                    Button("Reveal in Finder") {
-                        NSWorkspace.shared.selectFile(configFilePath, inFileViewerRootedAtPath: "")
+            Section("Appearance") {
+                Picker("Theme", selection: $themeManager.currentThemeName) {
+                    ForEach(themeManager.availableThemes, id: \.self) { theme in
+                        Text(theme).tag(theme)
                     }
                 }
-                
-                Text("All settings are persisted to this JSON file automatically.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                .onChange(of: themeManager.currentThemeName) { _, newValue in
+                    themeManager.setTheme(named: newValue)
+                    configManager.configuration.theme = newValue
+                    configManager.saveConfiguration()
+                }
             }
             
             Section("Startup") {
@@ -149,6 +143,24 @@ struct GeneralSettingsView: View {
                         Text("No saved connection")
                             .foregroundColor(.secondary)
                     }
+                }
+            }
+            
+            Section("Data") {
+                HStack {
+                    Text("Settings file")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(configFilePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    
+                    Button("Reveal") {
+                        NSWorkspace.shared.selectFile(configFilePath, inFileViewerRootedAtPath: "")
+                    }
+                    .controlSize(.small)
                 }
             }
             
@@ -179,33 +191,27 @@ struct GeneralSettingsView: View {
     }
 }
 
-struct ThemeSettingsView: View {
-    @EnvironmentObject var themeManager: ThemeManager
-    @EnvironmentObject var configManager: ConfigurationManager
-    
-    var body: some View {
-        Form {
-            Picker("Theme", selection: $themeManager.currentThemeName) {
-                ForEach(themeManager.availableThemes, id: \.self) { theme in
-                    Text(theme).tag(theme)
-                }
-            }
-            .onChange(of: themeManager.currentThemeName) { _, newValue in
-                themeManager.setTheme(named: newValue)
-                configManager.configuration.theme = newValue
-                configManager.saveConfiguration()
-            }
-        }
-        .padding()
-    }
-}
-
 struct EditorSettingsView: View {
     @EnvironmentObject var configManager: ConfigurationManager
     
     var body: some View {
         Form {
-            Section("Font Size") {
+            Section("Font") {
+                HStack {
+                    Text("Family")
+                    Spacer()
+                    TextField("Font Family", text: Binding(
+                        get: { configManager.configuration.editor?.fontFamily ?? "SF Mono" },
+                        set: { newValue in
+                            ensureEditorConfig()
+                            configManager.configuration.editor?.fontFamily = newValue
+                            configManager.saveConfiguration()
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                }
+                
                 HStack {
                     Text("Size: \(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)")
                         .font(.system(.body, design: .monospaced))
@@ -215,13 +221,9 @@ struct EditorSettingsView: View {
                             get: { configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize },
                             set: { newValue in
                                 let clamped = min(max(newValue, EditorConfig.minFontSize), EditorConfig.maxFontSize)
-                                if configManager.configuration.editor == nil {
-                                    configManager.configuration.editor = EditorConfig(fontSize: clamped)
-                                } else {
-                                    configManager.configuration.editor?.fontSize = clamped
-                                }
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.fontSize = clamped
                                 configManager.saveConfiguration()
-                                // Update the running font size via notification
                                 NotificationCenter.default.post(name: .fontSizeChanged, object: clamped)
                             }
                         ),
@@ -229,74 +231,167 @@ struct EditorSettingsView: View {
                     )
                 }
                 
-                Text("Controls font size for editor, sidebar, and results. Also adjustable with Cmd +/-/0.")
+                Text("Also adjustable with Cmd +/-/0.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             
-            Section("Vim Mode") {
-                Toggle("Enable Vim Mode by Default", isOn: Binding(
-                    get: { configManager.configuration.vimMode?.enabled ?? true },
+            Section("Indentation") {
+                HStack {
+                    Text("Tab Size")
+                    Spacer()
+                    Stepper("\(configManager.configuration.editor?.tabSize ?? 4)",
+                        value: Binding(
+                            get: { configManager.configuration.editor?.tabSize ?? 4 },
+                            set: { newValue in
+                                let clamped = min(max(newValue, 1), 16)
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.tabSize = clamped
+                                configManager.saveConfiguration()
+                            }
+                        ),
+                        in: 1...16
+                    )
+                }
+                
+                Toggle("Insert Spaces Instead of Tabs", isOn: Binding(
+                    get: { configManager.configuration.editor?.insertSpaces ?? true },
                     set: { newValue in
-                        if configManager.configuration.vimMode == nil {
-                            configManager.configuration.vimMode = VimModeConfig(enabled: newValue)
-                        } else {
-                            configManager.configuration.vimMode?.enabled = newValue
-                        }
+                        ensureEditorConfig()
+                        configManager.configuration.editor?.insertSpaces = newValue
                         configManager.saveConfiguration()
-                        NotificationCenter.default.post(name: .vimModeChanged, object: newValue)
                     }
                 ))
             }
             
-            Section("SQL Autocomplete") {
-                Picker("Autocomplete Mode", selection: Binding(
+            Section("Display") {
+                Toggle("Word Wrap", isOn: Binding(
+                    get: { configManager.configuration.editor?.wordWrap ?? true },
+                    set: { newValue in
+                        ensureEditorConfig()
+                        configManager.configuration.editor?.wordWrap = newValue
+                        configManager.saveConfiguration()
+                    }
+                ))
+                
+                Toggle("Show Line Numbers", isOn: Binding(
+                    get: { configManager.configuration.editor?.showLineNumbers ?? true },
+                    set: { newValue in
+                        ensureEditorConfig()
+                        configManager.configuration.editor?.showLineNumbers = newValue
+                        configManager.saveConfiguration()
+                    }
+                ))
+            }
+        }
+        .padding()
+    }
+    
+    private func ensureEditorConfig() {
+        if configManager.configuration.editor == nil {
+            configManager.configuration.editor = EditorConfig()
+        }
+    }
+}
+
+struct VimSettingsView: View {
+    @EnvironmentObject var configManager: ConfigurationManager
+    
+    var body: some View {
+        Form {
+            Section("Vim Mode") {
+                Toggle("Enable Vim Mode by Default", isOn: Binding(
+                    get: { configManager.configuration.vimMode?.enabled ?? true },
+                    set: { newValue in
+                        ensureVimConfig()
+                        configManager.configuration.vimMode?.enabled = newValue
+                        configManager.saveConfiguration()
+                        NotificationCenter.default.post(name: .vimModeChanged, object: newValue)
+                    }
+                ))
+                
+                Text("When enabled, the editor uses Vim keybindings. Toggle at any time with Cmd+Shift+V.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Section("Cursor") {
+                Toggle("Cursor Blink", isOn: Binding(
+                    get: { configManager.configuration.vimMode?.cursorBlink ?? true },
+                    set: { newValue in
+                        ensureVimConfig()
+                        configManager.configuration.vimMode?.cursorBlink = newValue
+                        configManager.saveConfiguration()
+                    }
+                ))
+                
+                Toggle("Relative Line Numbers", isOn: Binding(
+                    get: { configManager.configuration.vimMode?.relativeLineNumbers ?? false },
+                    set: { newValue in
+                        ensureVimConfig()
+                        configManager.configuration.vimMode?.relativeLineNumbers = newValue
+                        configManager.saveConfiguration()
+                    }
+                ))
+            }
+        }
+        .padding()
+    }
+    
+    private func ensureVimConfig() {
+        if configManager.configuration.vimMode == nil {
+            configManager.configuration.vimMode = VimModeConfig()
+        }
+    }
+}
+
+struct AutocompleteSettingsView: View {
+    @EnvironmentObject var configManager: ConfigurationManager
+    
+    var body: some View {
+        Form {
+            Section("Autocomplete Mode") {
+                Picker("Mode", selection: Binding(
                     get: { configManager.configuration.editor?.autocompleteMode ?? .ruleBased },
                     set: { newValue in
-                        if configManager.configuration.editor == nil {
-                            configManager.configuration.editor = EditorConfig(autocompleteMode: newValue)
-                        } else {
-                            configManager.configuration.editor?.autocompleteMode = newValue
-                        }
+                        ensureEditorConfig()
+                        configManager.configuration.editor?.autocompleteMode = newValue
                         configManager.saveConfiguration()
                     }
                 )) {
                     ForEach(AutocompleteMode.allCases, id: \.self) { mode in
-                        VStack(alignment: .leading) {
-                            Text(mode.displayName)
-                        }
-                        .tag(mode)
+                        Text(mode.displayName).tag(mode)
                     }
                 }
+                .pickerStyle(.radioGroup)
                 
                 Text(configManager.configuration.editor?.autocompleteMode.description ?? AutocompleteMode.ruleBased.description)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                
-                if configManager.configuration.editor?.autocompleteMode == .openAI {
-                    SecureField("OpenAI API Key", text: Binding(
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            
+            if configManager.configuration.editor?.autocompleteMode == .openAI {
+                Section("OpenAI") {
+                    SecureField("API Key", text: Binding(
                         get: { configManager.configuration.editor?.openAIApiKey ?? "" },
                         set: { newValue in
-                            if configManager.configuration.editor == nil {
-                                configManager.configuration.editor = EditorConfig(openAIApiKey: newValue)
-                            } else {
-                                configManager.configuration.editor?.openAIApiKey = newValue
-                            }
+                            ensureEditorConfig()
+                            configManager.configuration.editor?.openAIApiKey = newValue
                             configManager.saveConfiguration()
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
-                
-                if configManager.configuration.editor?.autocompleteMode == .anthropic {
-                    SecureField("Anthropic API Key", text: Binding(
+            }
+            
+            if configManager.configuration.editor?.autocompleteMode == .anthropic {
+                Section("Anthropic") {
+                    SecureField("API Key", text: Binding(
                         get: { configManager.configuration.editor?.anthropicApiKey ?? "" },
                         set: { newValue in
-                            if configManager.configuration.editor == nil {
-                                configManager.configuration.editor = EditorConfig(anthropicApiKey: newValue)
-                            } else {
-                                configManager.configuration.editor?.anthropicApiKey = newValue
-                            }
+                            ensureEditorConfig()
+                            configManager.configuration.editor?.anthropicApiKey = newValue
                             configManager.saveConfiguration()
                         }
                     ))
@@ -305,6 +400,12 @@ struct EditorSettingsView: View {
             }
         }
         .padding()
+    }
+    
+    private func ensureEditorConfig() {
+        if configManager.configuration.editor == nil {
+            configManager.configuration.editor = EditorConfig()
+        }
     }
 }
 

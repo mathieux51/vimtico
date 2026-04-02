@@ -290,6 +290,11 @@ class DatabaseViewModel: ObservableObject {
         guard isLoading, let task = runningQueryTask else { return }
         task.cancel()
         runningQueryTask = nil
+        isLoading = false
+        queryResult = QueryResult(
+            executionTime: 0,
+            error: "Query cancelled"
+        )
     }
     
     func selectTable(_ table: DatabaseTable) {
