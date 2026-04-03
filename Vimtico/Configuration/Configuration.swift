@@ -133,13 +133,13 @@ enum AutocompleteMode: String, Codable, CaseIterable {
 
 /// Available Claude models for autocomplete
 enum AnthropicModel: String, Codable, CaseIterable {
-    case haiku = "claude-3-5-haiku-20241022"
-    case sonnet = "claude-sonnet-4-20250514"
+    case haiku = "claude-haiku-4-5-20251001"
+    case sonnet = "claude-sonnet-4-6"
     
     var displayName: String {
         switch self {
-        case .haiku: return "Claude 3.5 Haiku (Fast)"
-        case .sonnet: return "Claude Sonnet 4 (Smarter)"
+        case .haiku: return "Claude Haiku 4.5 (Fast)"
+        case .sonnet: return "Claude Sonnet 4.6 (Smarter)"
         }
     }
 }

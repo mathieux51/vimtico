@@ -252,7 +252,7 @@ class SQLAutocompleteService: ObservableObject {
             return completions + ruleBased.prefix(10)
         } catch {
             print("OpenAI API error: \(error)")
-            await MainActor.run { lastAPIError = "\(error)" }
+            await MainActor.run { lastAPIError = error.localizedDescription }
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
         }
     }
@@ -329,7 +329,7 @@ class SQLAutocompleteService: ObservableObject {
             return completions + ruleBased.prefix(10)
         } catch {
             print("Anthropic API error: \(error)")
-            await MainActor.run { lastAPIError = "\(error)" }
+            await MainActor.run { lastAPIError = error.localizedDescription }
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
         }
     }
@@ -643,6 +643,24 @@ enum AutocompleteAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .httpError(let statusCode, let body):
+            // Try to parse a human-readable message from the JSON error body
+            if let data = body.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // Anthropic format: {"type":"error","error":{"type":"...","message":"..."}}
+                if let errorObj = json["error"] as? [String: Any],
+                   let message = errorObj["message"] as? String {
+                    return "\(statusCode): \(message)"
+                }
+                // OpenAI format: {"error":{"message":"...","type":"...","code":"..."}}
+                if let errorObj = json["error"] as? [String: Any],
+                   let message = errorObj["message"] as? String {
+                    return "\(statusCode): \(message)"
+                }
+                // Generic: {"message":"..."}
+                if let message = json["message"] as? String {
+                    return "\(statusCode): \(message)"
+                }
+            }
             return "HTTP \(statusCode): \(body.prefix(200))"
         case .invalidResponse:
             return "Invalid API response format"
