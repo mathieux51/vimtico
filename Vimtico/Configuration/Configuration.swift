@@ -144,6 +144,12 @@ enum AnthropicModel: String, Codable, CaseIterable {
     }
 }
 
+/// Info about an available Anthropic model, fetched from the API
+struct AnthropicModelInfo: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
 struct ConnectionConfig: Codable {
     var name: String
     var host: String
@@ -203,6 +209,7 @@ enum ConfigError: LocalizedError {
 class ConfigurationManager: ObservableObject {
     @Published var configuration: AppConfiguration = AppConfiguration()
     @Published var loadError: String? = nil
+    @Published var saveError: String? = nil
     
     private let configDirectory: URL
     private let configFile: URL
@@ -215,7 +222,13 @@ class ConfigurationManager: ObservableObject {
     
     func loadConfiguration() {
         // Create config directory if it doesn't exist
-        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        } catch {
+            loadError = "Failed to create config directory: \(error.localizedDescription)"
+            configuration = AppConfiguration()
+            return
+        }
         
         // Try to load existing config
         if FileManager.default.fileExists(atPath: configFile.path) {
@@ -248,8 +261,9 @@ class ConfigurationManager: ObservableObject {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(configuration)
             try data.write(to: configFile)
+            saveError = nil
         } catch {
-            print("Failed to save configuration: \(error)")
+            saveError = "Failed to save configuration: \(error.localizedDescription)"
         }
     }
     

@@ -28,6 +28,7 @@
 		A1000018 /* PostgresNIO in Frameworks */ = {isa = PBXBuildFile; productRef = A3000001 /* PostgresNIO */; };
 		A1000019 /* SSHTunnelService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* SSHTunnelService.swift */; };
 		A1000020 /* SQLAutocompleteService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000021 /* SQLAutocompleteService.swift */; };
+		A1000023 /* SmartAutocompleteEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000023 /* SmartAutocompleteEngine.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -54,6 +55,7 @@
 		A2000019 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000020 /* SSHTunnelService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTunnelService.swift; sourceTree = "<group>"; };
 		A2000021 /* SQLAutocompleteService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLAutocompleteService.swift; sourceTree = "<group>"; };
+		A2000023 /* SmartAutocompleteEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartAutocompleteEngine.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -139,6 +141,7 @@
 				A2000007 /* PostgreSQLService.swift */,
 				A2000020 /* SSHTunnelService.swift */,
 				A2000021 /* SQLAutocompleteService.swift */,
+				A2000023 /* SmartAutocompleteEngine.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -263,6 +266,7 @@
 				A1000017 /* ThemeManager.swift in Sources */,
 				A1000019 /* SSHTunnelService.swift in Sources */,
 				A1000020 /* SQLAutocompleteService.swift in Sources */,
+				A1000023 /* SmartAutocompleteEngine.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

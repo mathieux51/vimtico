@@ -9,6 +9,10 @@ struct VimTextEditor: NSViewRepresentable {
     @Binding var fontSize: CGFloat
     let theme: Theme
     
+    // Cursor tracking
+    @Binding var cursorPosition: Int
+    @Binding var cursorRect: CGRect
+    
     // Autocomplete support
     @Binding var showingAutocomplete: Bool
     @Binding var cursorPositionAfterCompletion: Int?
@@ -23,6 +27,8 @@ struct VimTextEditor: NSViewRepresentable {
          vimModeEnabled: Binding<Bool>,
          fontSize: Binding<CGFloat>,
          theme: Theme,
+         cursorPosition: Binding<Int> = .constant(0),
+         cursorRect: Binding<CGRect> = .constant(.zero),
          showingAutocomplete: Binding<Bool> = .constant(false),
          cursorPositionAfterCompletion: Binding<Int?> = .constant(nil),
          onAutocompleteAccept: (() -> Void)? = nil,
@@ -35,6 +41,8 @@ struct VimTextEditor: NSViewRepresentable {
         self._vimModeEnabled = vimModeEnabled
         self._fontSize = fontSize
         self.theme = theme
+        self._cursorPosition = cursorPosition
+        self._cursorRect = cursorRect
         self._showingAutocomplete = showingAutocomplete
         self._cursorPositionAfterCompletion = cursorPositionAfterCompletion
         self.onAutocompleteAccept = onAutocompleteAccept
@@ -55,7 +63,6 @@ struct VimTextEditor: NSViewRepresentable {
         textView.isRichText = false
         textView.allowsUndo = true
         textView.font = NSFont.monospacedSystemFont(ofSize: fontSize + 4, weight: .regular)
-        textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
@@ -67,7 +74,6 @@ struct VimTextEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         
         // Store references for vim mode
@@ -83,7 +89,21 @@ struct VimTextEditor: NSViewRepresentable {
             onTab: onTab
         )
         
+        // Set up line number ruler
+        let lineNumberGutter = LineNumberRulerView(textView: textView, theme: theme)
+        lineNumberGutter.clientView = textView
+        scrollView.verticalRulerView = lineNumberGutter
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+        
+        // Inset for text (leave space from the ruler, not extra left padding)
+        textView.textContainerInset = NSSize(width: 4, height: 8)
+        textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        
         scrollView.documentView = textView
+        
+        // Store the ruler reference on the text view for updates
+        textView.lineNumberRuler = lineNumberGutter
         
         applyTheme(to: textView)
         
@@ -94,20 +114,29 @@ struct VimTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? VimEnabledTextView else { return }
         
         if textView.string != text {
+            let prevRange = textView.selectedRange()
             textView.string = text
             
             // If we have a cursor position from autocomplete, apply it
             if let cursorPos = cursorPositionAfterCompletion {
                 let safePos = min(cursorPos, textView.string.count)
                 textView.setSelectedRange(NSRange(location: safePos, length: 0))
+                textView.scrollRangeToVisible(NSRange(location: safePos, length: 0))
                 DispatchQueue.main.async {
                     self.cursorPositionAfterCompletion = nil
                 }
+            } else {
+                // Preserve cursor position if possible
+                let safePos = min(prevRange.location, textView.string.count)
+                textView.setSelectedRange(NSRange(location: safePos, length: 0))
             }
         }
         
         // Update font size if changed
-        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize + 4, weight: .regular)
+        let newFont = NSFont.monospacedSystemFont(ofSize: fontSize + 4, weight: .regular)
+        if textView.font != newFont {
+            textView.font = newFont
+        }
         
         textView.vimModeEnabledBinding = $vimModeEnabled
         textView.isShowingAutocomplete = showingAutocomplete
@@ -120,6 +149,12 @@ struct VimTextEditor: NSViewRepresentable {
         )
         applyTheme(to: textView)
         applySyntaxHighlighting(to: textView)
+        
+        // Update ruler theme
+        if let ruler = scrollView.verticalRulerView as? LineNumberRulerView {
+            ruler.theme = theme
+            ruler.needsDisplay = true
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -139,6 +174,7 @@ struct VimTextEditor: NSViewRepresentable {
         guard let textStorage = textView.textStorage else { return }
         
         let fullRange = NSRange(location: 0, length: textStorage.length)
+        guard fullRange.length > 0 else { return }
         
         // Reset to default color and font
         textStorage.addAttribute(.foregroundColor, value: NSColor(theme.editorForegroundColor), range: fullRange)
@@ -220,16 +256,191 @@ struct VimTextEditor: NSViewRepresentable {
         }
         
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard let textView = notification.object as? VimEnabledTextView else { return }
             parent.text = textView.string
+            updateCursorInfo(textView)
+            // Ensure scroll follows cursor after typing
+            textView.scrollRangeToVisible(textView.selectedRange())
+            // Refresh line numbers
+            textView.lineNumberRuler?.needsDisplay = true
+        }
+        
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? VimEnabledTextView else { return }
+            updateCursorInfo(textView)
+            // Scroll to keep cursor visible
+            textView.scrollRangeToVisible(textView.selectedRange())
+            // Refresh line numbers on selection change
+            textView.lineNumberRuler?.needsDisplay = true
+        }
+        
+        private func updateCursorInfo(_ textView: VimEnabledTextView) {
+            let pos = textView.selectedRange().location
+            parent.cursorPosition = pos
+            
+            // Compute cursor rect in the text view's coordinate space,
+            // then convert to the scroll view (our NSView) coordinate space.
+            guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
+            let nsString = textView.string as NSString
+            
+            var rect: NSRect
+            if pos < nsString.length {
+                let glyphIndex = lm.glyphIndexForCharacter(at: pos)
+                let glyphRange = NSRange(location: glyphIndex, length: 1)
+                rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            } else if nsString.length > 0 {
+                let lastIdx = lm.glyphIndexForCharacter(at: nsString.length - 1)
+                let glyphRange = NSRange(location: lastIdx, length: 1)
+                let lastRect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+                rect = NSRect(
+                    x: lastRect.maxX,
+                    y: lastRect.origin.y,
+                    width: 1,
+                    height: lastRect.height
+                )
+            } else {
+                rect = NSRect(x: 0, y: 0, width: 1, height: (textView.font?.pointSize ?? 14) * 1.2)
+            }
+            
+            // Offset by textContainerOrigin
+            rect.origin.x += textView.textContainerOrigin.x
+            rect.origin.y += textView.textContainerOrigin.y
+            
+            // Convert from text view coords to scroll view (the NSView we return)
+            if let scrollView = textView.enclosingScrollView {
+                let converted = textView.convert(rect, to: scrollView)
+                // Flip y: NSView uses bottom-left origin, SwiftUI uses top-left.
+                // The scroll view's clip view's documentVisibleRect gives us the visible area.
+                let visibleRect = scrollView.contentView.bounds
+                let flippedY = converted.origin.y - visibleRect.origin.y
+                parent.cursorRect = CGRect(x: converted.origin.x, y: flippedY, width: rect.width, height: rect.height)
+            }
         }
     }
 }
+
+// MARK: - Line Number Ruler View
+
+class LineNumberRulerView: NSRulerView {
+    var theme: Theme
+    private weak var textView: NSTextView?
+    
+    init(textView: NSTextView, theme: Theme) {
+        self.textView = textView
+        self.theme = theme
+        super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
+        self.ruleThickness = 40
+        self.clientView = textView
+        
+        // Observe text changes to refresh line numbers
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(textDidChange(_:)),
+            name: NSText.didChangeNotification, object: textView
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(boundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: textView.enclosingScrollView?.contentView
+        )
+    }
+    
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    @objc private func textDidChange(_ notification: Notification) {
+        needsDisplay = true
+    }
+    
+    @objc private func boundsDidChange(_ notification: Notification) {
+        needsDisplay = true
+    }
+    
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        guard let textView = self.textView,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+        
+        let bgColor = NSColor(theme.editorBackgroundColor)
+        bgColor.setFill()
+        rect.fill()
+        
+        // Draw a subtle right border
+        let borderColor = NSColor(theme.foregroundColor).withAlphaComponent(0.1)
+        borderColor.setStroke()
+        let borderPath = NSBezierPath()
+        borderPath.move(to: NSPoint(x: rect.maxX - 0.5, y: rect.minY))
+        borderPath.line(to: NSPoint(x: rect.maxX - 0.5, y: rect.maxY))
+        borderPath.lineWidth = 1
+        borderPath.stroke()
+        
+        let textString = textView.string as NSString
+        let visibleRect = textView.visibleRect
+        let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+        let visibleCharRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
+        
+        let font = NSFont.monospacedSystemFont(ofSize: max((textView.font?.pointSize ?? 14) - 6, 9), weight: .regular)
+        
+        // Determine which line the cursor is on for highlighting
+        let cursorPos = textView.selectedRange().location
+        var cursorLine = 1
+        var idx = 0
+        while idx < cursorPos && idx < textString.length {
+            if textString.character(at: idx) == 10 { // newline
+                cursorLine += 1
+            }
+            idx += 1
+        }
+        
+        // Count lines up to the visible range start
+        var lineNumber = 1
+        var scanIdx = 0
+        while scanIdx < visibleCharRange.location && scanIdx < textString.length {
+            if textString.character(at: scanIdx) == 10 {
+                lineNumber += 1
+            }
+            scanIdx += 1
+        }
+        
+        // Iterate over visible lines
+        var charIndex = visibleCharRange.location
+        while charIndex < NSMaxRange(visibleCharRange) {
+            let lineRange = textString.lineRange(for: NSRange(location: charIndex, length: 0))
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
+            var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            lineRect.origin.y += textView.textContainerOrigin.y
+            
+            // Convert to ruler coordinates
+            let yPos = lineRect.origin.y - visibleRect.origin.y
+            
+            let isCursorLine = lineNumber == cursorLine
+            
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: isCursorLine
+                    ? NSColor(theme.foregroundColor).withAlphaComponent(0.9)
+                    : NSColor(theme.foregroundColor).withAlphaComponent(0.35)
+            ]
+            
+            let lineStr = "\(lineNumber)" as NSString
+            let strSize = lineStr.size(withAttributes: attrs)
+            // Right-align within the ruler
+            let xPos = ruleThickness - strSize.width - 8
+            lineStr.draw(at: NSPoint(x: xPos, y: yPos), withAttributes: attrs)
+            
+            lineNumber += 1
+            charIndex = NSMaxRange(lineRange)
+        }
+    }
+}
+
+// MARK: - VimEnabledTextView
 
 class VimEnabledTextView: NSTextView {
     var vimEngine: VimEngine?
     var vimModeEnabledBinding: Binding<Bool>?
     var isShowingAutocomplete: Bool = false
+    weak var lineNumberRuler: LineNumberRulerView?
     
     struct AutocompleteCallbacks {
         var onAccept: (() -> Void)?
@@ -291,6 +502,10 @@ class VimEnabledTextView: NSTextView {
         if let engine = vimEngine, vimModeEnabledBinding?.wrappedValue == true,
            engine.mode == .normal {
             needsDisplay = true
+        }
+        // Ensure cursor is always visible after programmatic selection changes
+        if !stillSelectingFlag {
+            scrollRangeToVisible(charRange)
         }
     }
     
@@ -393,7 +608,8 @@ class VimEnabledTextView: NSTextView {
         
         // Let vim engine handle the key event
         if engine.handleKeyEvent(event, in: self) {
-            // Event was handled by vim
+            // Event was handled by vim. Ensure scroll follows cursor.
+            scrollRangeToVisible(selectedRange())
             return
         }
         

@@ -29,6 +29,11 @@ struct VimticoApp: App {
                     NotificationCenter.default.post(name: .executeQuery, object: nil)
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
+                
+                Button("Go to Line...") {
+                    NotificationCenter.default.post(name: .goToLine, object: nil)
+                }
+                .keyboardShortcut("g", modifiers: [.control])
             }
             CommandMenu("View") {
                 Button("Focus Sidebar") {
@@ -515,9 +520,20 @@ struct VimSettingsView: View {
 
 struct AutocompleteSettingsView: View {
     @EnvironmentObject var configManager: ConfigurationManager
+    @State private var availableModels: [AnthropicModelInfo] = []
+    @State private var isFetchingModels: Bool = false
+    @State private var fetchError: String?
     
     private var currentMode: AutocompleteMode {
         configManager.configuration.editor?.autocompleteMode ?? .ruleBased
+    }
+    
+    private var currentAnthropicKey: String {
+        configManager.configuration.editor?.anthropicApiKey ?? ""
+    }
+    
+    private var currentModelId: String {
+        configManager.configuration.editor?.anthropicModel?.rawValue ?? AnthropicModel.haiku.rawValue
     }
     
     var body: some View {
@@ -562,32 +578,78 @@ struct AutocompleteSettingsView: View {
             if currentMode == .anthropic {
                 SettingsSection("Anthropic") {
                     SettingRow("API Key") {
-                        SecureField("sk-ant-...", text: Binding(
-                            get: { configManager.configuration.editor?.anthropicApiKey ?? "" },
-                            set: { newValue in
-                                ensureEditorConfig()
-                                configManager.configuration.editor?.anthropicApiKey = newValue
-                                configManager.saveConfiguration()
+                        HStack {
+                            SecureField("sk-ant-...", text: Binding(
+                                get: { configManager.configuration.editor?.anthropicApiKey ?? "" },
+                                set: { newValue in
+                                    ensureEditorConfig()
+                                    configManager.configuration.editor?.anthropicApiKey = newValue
+                                    configManager.saveConfiguration()
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 220)
+                            .onSubmit {
+                                fetchModels()
                             }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 280)
+                            
+                            Button(action: { fetchModels() }) {
+                                if isFetchingModels {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                        .frame(width: 16, height: 16)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                            }
+                            .disabled(currentAnthropicKey.isEmpty || isFetchingModels)
+                            .help("Fetch available models")
+                        }
                     }
                     SettingRow("Model") {
-                        Picker("", selection: Binding(
-                            get: { configManager.configuration.editor?.effectiveAnthropicModel ?? .haiku },
-                            set: { newValue in
-                                ensureEditorConfig()
-                                configManager.configuration.editor?.anthropicModel = newValue
-                                configManager.saveConfiguration()
+                        if availableModels.isEmpty && !isFetchingModels {
+                            HStack(spacing: 8) {
+                                // Fallback to hardcoded defaults
+                                Picker("", selection: Binding(
+                                    get: { currentModelId },
+                                    set: { newValue in
+                                        ensureEditorConfig()
+                                        // Find matching enum case or store as-is
+                                        configManager.configuration.editor?.anthropicModel = AnthropicModel(rawValue: newValue)
+                                        configManager.saveConfiguration()
+                                    }
+                                )) {
+                                    ForEach(AnthropicModel.allCases, id: \.self) { model in
+                                        Text(model.displayName).tag(model.rawValue)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 240)
                             }
-                        )) {
-                            ForEach(AnthropicModel.allCases, id: \.self) { model in
-                                Text(model.displayName).tag(model)
+                        } else {
+                            Picker("", selection: Binding(
+                                get: { currentModelId },
+                                set: { newValue in
+                                    ensureEditorConfig()
+                                    configManager.configuration.editor?.anthropicModel = AnthropicModel(rawValue: newValue)
+                                    configManager.saveConfiguration()
+                                }
+                            )) {
+                                ForEach(availableModels) { model in
+                                    Text(model.displayName).tag(model.id)
+                                }
                             }
+                            .labelsHidden()
+                            .frame(width: 240)
                         }
-                        .labelsHidden()
-                        .frame(width: 240)
+                    }
+                    if let error = fetchError {
+                        SettingHint(text: error)
+                    }
+                }
+                .onAppear {
+                    if availableModels.isEmpty && !currentAnthropicKey.isEmpty {
+                        fetchModels()
                     }
                 }
             }
@@ -600,6 +662,59 @@ struct AutocompleteSettingsView: View {
     private func ensureEditorConfig() {
         if configManager.configuration.editor == nil {
             configManager.configuration.editor = EditorConfig()
+        }
+    }
+    
+    private func fetchModels() {
+        guard !currentAnthropicKey.isEmpty else { return }
+        isFetchingModels = true
+        fetchError = nil
+        Task {
+            do {
+                let models = try await fetchAnthropicModels(apiKey: currentAnthropicKey)
+                await MainActor.run {
+                    availableModels = models
+                    isFetchingModels = false
+                    // If current model not in list, auto-select first
+                    if !models.isEmpty && !models.contains(where: { $0.id == currentModelId }) {
+                        ensureEditorConfig()
+                        configManager.configuration.editor?.anthropicModel = AnthropicModel(rawValue: models.first!.id)
+                        configManager.saveConfiguration()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    fetchError = error.localizedDescription
+                    isFetchingModels = false
+                }
+            }
+        }
+    }
+    
+    private func fetchAnthropicModels(apiKey: String) async throws -> [AnthropicModelInfo] {
+        let url = URL(string: "https://api.anthropic.com/v1/models?limit=100")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 10
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AutocompleteAPIError.httpError(statusCode: httpResponse.statusCode, body: errorBody)
+        }
+        
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelsArray = json["data"] as? [[String: Any]] else {
+            throw AutocompleteAPIError.invalidResponse
+        }
+        
+        return modelsArray.compactMap { model -> AnthropicModelInfo? in
+            guard let id = model["id"] as? String,
+                  let displayName = model["display_name"] as? String else { return nil }
+            return AnthropicModelInfo(id: id, displayName: displayName)
         }
     }
 }
@@ -619,4 +734,5 @@ extension Notification.Name {
     static let fontSizeChanged = Notification.Name("fontSizeChanged")
     static let vimModeChanged = Notification.Name("vimModeChanged")
     static let editorBecameFirstResponder = Notification.Name("editorBecameFirstResponder")
+    static let goToLine = Notification.Name("goToLine")
 }

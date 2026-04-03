@@ -5,15 +5,9 @@ struct QueryEditorView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var configManager: ConfigurationManager
     @State private var vimEngine = VimEngine()
-    @State private var cursorPosition: Int = 0
-    
-    /// Offset the autocomplete popup below the first line of text,
-    /// accounting for the current font size and the text container inset.
-    private var autocompleteTopOffset: CGFloat {
-        let lineHeight = ceil(viewModel.fontSize * 1.2)
-        let textContainerInset: CGFloat = 8
-        return textContainerInset + lineHeight + 12
-    }
+    @State private var cursorRect: CGRect = .zero
+    @State private var showGoToLine: Bool = false
+    @State private var goToLineText: String = ""
     
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +22,16 @@ struct QueryEditorView: View {
                 .disabled(!viewModel.isConnected || viewModel.isLoading)
                 
                 Spacer()
+                
+                // Line:Col indicator
+                let lineCol = computeLineCol()
+                Text("Ln \(lineCol.line), Col \(lineCol.col)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.5))
+                    .onTapGesture {
+                        showGoToLine = true
+                    }
+                    .help("Click to go to line (Ctrl+G)")
                 
                 // Autocomplete mode indicator
                 if viewModel.autocompleteService.currentMode != .disabled {
@@ -96,6 +100,8 @@ struct QueryEditorView: View {
                     vimModeEnabled: $viewModel.vimModeEnabled,
                     fontSize: $viewModel.fontSize,
                     theme: themeManager.currentTheme,
+                    cursorPosition: $viewModel.cursorPosition,
+                    cursorRect: $cursorRect,
                     showingAutocomplete: $viewModel.showAutocompleteSuggestions,
                     cursorPositionAfterCompletion: $viewModel.cursorPositionAfterCompletion,
                     onAutocompleteAccept: {
@@ -111,18 +117,18 @@ struct QueryEditorView: View {
                         viewModel.dismissAutocomplete()
                     },
                     onTab: {
-                        viewModel.requestAutocomplete(at: viewModel.queryText.count)
+                        viewModel.requestAutocomplete(at: viewModel.cursorPosition)
                     }
                 )
                 .frame(minHeight: 100)
                 .onChange(of: viewModel.queryText) { _, newValue in
-                    // Request autocomplete on text change (debounced for API modes)
-                    viewModel.requestAutocomplete(at: newValue.count)
+                    // Request autocomplete on text change using actual cursor position
+                    viewModel.requestAutocomplete(at: viewModel.cursorPosition)
                     // Schedule debounced SQL validation
                     viewModel.scheduleValidation()
                 }
                 
-                // Autocomplete popup
+                // Autocomplete popup positioned at cursor
                 if viewModel.showAutocompleteSuggestions && !viewModel.autocompleteSuggestions.isEmpty {
                     AutocompletePopupView(
                         suggestions: viewModel.autocompleteSuggestions,
@@ -136,8 +142,10 @@ struct QueryEditorView: View {
                         }
                     )
                     .frame(maxWidth: 400, maxHeight: 200)
-                    .padding(.top, autocompleteTopOffset)
-                    .padding(.leading, 16)
+                    .offset(
+                        x: max(0, cursorRect.origin.x),
+                        y: cursorRect.origin.y + cursorRect.height + 2
+                    )
                     .zIndex(100)
                 }
             }
@@ -218,6 +226,16 @@ struct QueryEditorView: View {
             }
         }
         .background(themeManager.currentTheme.editorBackgroundColor)
+        .sheet(isPresented: $showGoToLine) {
+            GoToLineSheet(
+                lineText: $goToLineText,
+                isPresented: $showGoToLine,
+                theme: themeManager.currentTheme,
+                onGoToLine: { line in
+                    goToLine(line)
+                }
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .executeQuery)) { _ in
             viewModel.executeQuery()
         }
@@ -250,7 +268,9 @@ struct QueryEditorView: View {
                 viewModel.executeSelectedQuery(sql)
             }
         }
-
+        .onReceive(NotificationCenter.default.publisher(for: .goToLine)) { _ in
+            showGoToLine = true
+        }
         .onAppear {
             // Load font size from config
             viewModel.fontSize = CGFloat(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)
@@ -258,9 +278,100 @@ struct QueryEditorView: View {
             let mode = configManager.configuration.editor?.autocompleteMode ?? .ruleBased
             let openAIKey = configManager.configuration.editor?.openAIApiKey
             let anthropicKey = configManager.configuration.editor?.anthropicApiKey
-            let anthropicModel = configManager.configuration.editor?.effectiveAnthropicModel ?? .haiku
+            let anthropicModel = configManager.configuration.editor?.anthropicModel?.rawValue
             viewModel.configureAutocomplete(mode: mode, openAIKey: openAIKey, anthropicKey: anthropicKey, anthropicModel: anthropicModel)
         }
+    }
+    
+    // MARK: - Helpers
+    
+    private func computeLineCol() -> (line: Int, col: Int) {
+        let text = viewModel.queryText
+        let pos = min(viewModel.cursorPosition, text.count)
+        var line = 1
+        var col = 1
+        var idx = text.startIndex
+        var count = 0
+        while count < pos && idx < text.endIndex {
+            if text[idx] == "\n" {
+                line += 1
+                col = 1
+            } else {
+                col += 1
+            }
+            idx = text.index(after: idx)
+            count += 1
+        }
+        return (line, col)
+    }
+    
+    private func goToLine(_ lineNumber: Int) {
+        let text = viewModel.queryText
+        var currentLine = 1
+        var pos = 0
+        for (i, ch) in text.enumerated() {
+            if currentLine == lineNumber {
+                pos = i
+                break
+            }
+            if ch == "\n" {
+                currentLine += 1
+            }
+            pos = i + 1
+        }
+        // If the target line is beyond the text, go to the end
+        if currentLine < lineNumber {
+            pos = text.count
+        }
+        viewModel.cursorPosition = min(pos, text.count)
+        viewModel.cursorPositionAfterCompletion = viewModel.cursorPosition
+    }
+}
+
+// MARK: - Go To Line Sheet
+
+struct GoToLineSheet: View {
+    @Binding var lineText: String
+    @Binding var isPresented: Bool
+    let theme: Theme
+    let onGoToLine: (Int) -> Void
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Go to Line")
+                .font(.headline)
+            
+            TextField("Line number", text: $lineText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 200)
+                .onSubmit {
+                    if let line = Int(lineText), line > 0 {
+                        onGoToLine(line)
+                        isPresented = false
+                        lineText = ""
+                    }
+                }
+            
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    isPresented = false
+                    lineText = ""
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Button("Go") {
+                    if let line = Int(lineText), line > 0 {
+                        onGoToLine(line)
+                        isPresented = false
+                        lineText = ""
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(Int(lineText) == nil || (Int(lineText) ?? 0) <= 0)
+            }
+        }
+        .padding(24)
+        .frame(width: 280)
     }
 }
 
@@ -325,6 +436,7 @@ struct AutocompleteRowView: View {
         case .operator: return Color.orange
         case .symbol: return theme.foregroundColor
         case .snippet: return Color.cyan
+        case .value: return Color.yellow
         }
     }
     

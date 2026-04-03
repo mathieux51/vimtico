@@ -1,184 +1,90 @@
 import Foundation
 
-/// SQL Autocomplete service that provides context-aware suggestions
-/// Supports multiple modes: Rule-based, and API-based (OpenAI, Anthropic)
+/// SQL Autocomplete service that orchestrates completions across all layers.
+/// Delegates schema-aware completions to SmartAutocompleteEngine.
+/// Handles API-based completions (OpenAI, Anthropic) and merges with smart results.
 class SQLAutocompleteService: ObservableObject {
     
     @Published var isLoading: Bool = false
     @Published var currentMode: AutocompleteMode = .ruleBased
     @Published var lastAPIError: String?
+    @Published var availableAnthropicModels: [AnthropicModelInfo] = []
+    @Published var isFetchingModels: Bool = false
     
     // API Keys
     var openAIApiKey: String?
     var anthropicApiKey: String?
-    var anthropicModel: AnthropicModel = .haiku
+    var anthropicModel: String = AnthropicModel.haiku.rawValue
     
-    // MARK: - SQL Keywords
+    /// The smart engine that handles schema-aware, value-lookup, and history completions
+    let smartEngine = SmartAutocompleteEngine()
     
-    static let sqlKeywords: [String] = [
-        // DQL (Data Query Language)
-        "select", "from", "where", "and", "or", "not", "in", "like", "ilike", "between",
-        "is", "null", "true", "false", "as", "distinct", "all",
-        "order", "by", "asc", "desc", "nulls", "first", "last",
-        "group", "having", "limit", "offset", "fetch", "next", "rows", "only",
-        "union", "intersect", "except",
-        
-        // Joins
-        "join", "inner", "left", "right", "full", "outer", "cross", "natural", "on", "using",
-        
-        // Subqueries
-        "exists", "any", "some", "all",
-        
-        // CTE
-        "with", "recursive",
-        
-        // DML (Data Manipulation Language)
-        "insert", "into", "values", "default",
-        "update", "set",
-        "delete",
-        "returning",
-        "on", "conflict", "do", "nothing",
-        
-        // DDL (Data Definition Language)
-        "create", "alter", "drop", "truncate",
-        "table", "index", "view", "materialized", "schema", "database", "sequence",
-        "primary", "key", "foreign", "references", "unique", "check", "constraint",
-        "cascade", "restrict", "no", "action",
-        "if", "exists",
-        
-        // Data types
-        "integer", "int", "bigint", "smallint", "serial", "bigserial",
-        "real", "double", "precision", "numeric", "decimal",
-        "varchar", "char", "text", "character", "varying",
-        "boolean", "bool",
-        "date", "time", "timestamp", "timestamptz", "interval",
-        "uuid", "json", "jsonb", "array", "bytea",
-        
-        // Control flow
-        "case", "when", "then", "else", "end",
-        "coalesce", "nullif", "greatest", "least",
-        
-        // Transactions
-        "begin", "commit", "rollback", "savepoint", "transaction",
-        
-        // Permissions
-        "grant", "revoke", "to", "public",
-        
-        // Other
-        "explain", "analyze", "verbose", "costs", "buffers", "format"
-    ]
+    // MARK: - Schema Cache (delegated to smart engine)
     
-    static let sqlFunctions: [String] = [
-        // Aggregate functions
-        "count", "sum", "avg", "min", "max",
-        "array_agg", "string_agg", "json_agg", "jsonb_agg",
-        "bool_and", "bool_or", "bit_and", "bit_or",
-        
-        // String functions
-        "concat", "concat_ws", "length", "char_length", "octet_length",
-        "lower", "upper", "initcap",
-        "trim", "ltrim", "rtrim", "btrim",
-        "left", "right", "substring", "substr",
-        "position", "strpos", "replace", "translate",
-        "split_part", "regexp_replace", "regexp_match", "regexp_matches",
-        "format", "quote_ident", "quote_literal", "quote_nullable",
-        "repeat", "reverse", "lpad", "rpad",
-        
-        // Numeric functions
-        "abs", "ceil", "ceiling", "floor", "round", "trunc",
-        "mod", "power", "sqrt", "cbrt", "exp", "ln", "log",
-        "sign", "random", "setseed",
-        "greatest", "least",
-        
-        // Date/Time functions
-        "now", "current_date", "current_time", "current_timestamp",
-        "localtime", "localtimestamp",
-        "date_part", "date_trunc", "extract",
-        "age", "make_date", "make_time", "make_timestamp",
-        "to_char", "to_date", "to_timestamp", "to_number",
-        
-        // JSON functions
-        "json_build_object", "json_build_array", "json_object", "json_array",
-        "jsonb_build_object", "jsonb_build_array",
-        "json_extract_path", "json_extract_path_text",
-        "jsonb_extract_path", "jsonb_extract_path_text",
-        "json_array_length", "jsonb_array_length",
-        "json_typeof", "jsonb_typeof",
-        "json_strip_nulls", "jsonb_strip_nulls",
-        "jsonb_set", "jsonb_insert", "jsonb_pretty",
-        
-        // Array functions
-        "array_length", "array_dims", "array_lower", "array_upper",
-        "array_position", "array_positions", "array_remove", "array_replace",
-        "array_cat", "array_append", "array_prepend",
-        "unnest", "array_to_string", "string_to_array",
-        
-        // Conditional functions
-        "coalesce", "nullif", "greatest", "least",
-        
-        // Type casting
-        "cast", "convert",
-        
-        // Window functions
-        "row_number", "rank", "dense_rank", "ntile",
-        "lag", "lead", "first_value", "last_value", "nth_value",
-        "percent_rank", "cume_dist",
-        
-        // System functions
-        "current_user", "session_user", "current_schema", "current_catalog",
-        "version", "pg_typeof"
-    ]
-    
-    // MARK: - Completion Context
-    
-    enum CompletionContext {
-        case initial
-        case afterSelect
-        case afterFrom
-        case afterJoin
-        case afterWhere
-        case afterOrderBy
-        case afterGroupBy
-        case afterInsertInto
-        case afterUpdate
-        case afterSet
-        case afterOn
-        case afterUsing
-        case afterValues
-        case afterCreate
-        case generic
-    }
-    
-    // MARK: - Schema Cache
-    
-    private var cachedTables: [String] = []
-    private var cachedColumns: [String: [String]] = [:]
-    private var cachedSchemas: [String] = []
-    
-    // MARK: - Public Methods
-    
-    /// Update the schema cache with table names
+    /// Update the schema cache with table names (legacy compat + engine update)
     func updateTables(_ tables: [String]) {
-        cachedTables = tables.sorted()
+        // Legacy: still used for API schema context fallback
     }
     
     /// Update the schema cache with schema names
     func updateSchemas(_ schemas: [String]) {
-        cachedSchemas = schemas.sorted()
+        // Handled by smartEngine.updateSchema
     }
     
-    /// Add columns for a table to cache
+    /// Add columns for a table to cache (legacy, name-only)
     func updateColumns(for tableName: String, columns: [String]) {
-        cachedColumns[tableName] = columns
+        // Legacy: prefer updateRichColumns which passes full ColumnInfo
     }
     
-    /// Get completions based on current mode
+    /// Update schema with rich metadata (tables + typed columns).
+    /// This is the preferred path that feeds the smart engine.
+    func updateSchemaFromDatabase(tables: [DatabaseTable], columnsByTable: [String: [DatabaseColumn]]) {
+        let tableTuples = tables.map { (name: $0.name, schema: $0.schema, type: $0.type.rawValue) }
+        var richColumns: [String: [ColumnInfo]] = [:]
+        for (table, cols) in columnsByTable {
+            richColumns[table] = cols.map { col in
+                ColumnInfo(
+                    name: col.name,
+                    dataType: col.dataType,
+                    isNullable: col.isNullable,
+                    defaultValue: col.defaultValue,
+                    isPrimaryKey: col.isPrimaryKey
+                )
+            }
+        }
+        smartEngine.updateSchema(tables: tableTuples, columns: richColumns)
+    }
+    
+    /// Update columns for a single table with rich metadata
+    func updateRichColumns(for tableName: String, columns: [DatabaseColumn]) {
+        smartEngine.updateColumns(for: tableName, columns: columns.map { col in
+            ColumnInfo(
+                name: col.name,
+                dataType: col.dataType,
+                isNullable: col.isNullable,
+                defaultValue: col.defaultValue,
+                isPrimaryKey: col.isPrimaryKey
+            )
+        })
+    }
+    
+    /// Record a query for history-based predictions
+    func recordQuery(_ sql: String, connectionId: UUID?) {
+        smartEngine.recordQuery(sql, connectionId: connectionId)
+    }
+    
+    // MARK: - Get Completions
+    
+    /// Get completions based on current mode.
+    /// For rule-based mode: uses SmartAutocompleteEngine directly (fast, sync).
+    /// For API modes: calls API with rich schema context, merges with smart engine results.
     func getCompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         switch currentMode {
         case .disabled:
             return []
         case .ruleBased:
-            return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
+            // Use smart engine with async value lookups
+            return await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
         case .openAI:
             return await getOpenAICompletions(text: text, cursorPosition: cursorPosition)
         case .anthropic:
@@ -186,78 +92,74 @@ class SQLAutocompleteService: ObservableObject {
         }
     }
     
-    // MARK: - Rule-Based Completions
-    
-    func getRuleBasedCompletions(text: String, cursorPosition: Int) -> [SQLCompletion] {
-        let prefix = String(text.prefix(cursorPosition))
-        let context = determineContext(prefix)
-        let currentWord = getCurrentWord(prefix)
-        
-        var completions: [SQLCompletion] = []
-        
-        switch context {
-        case .initial:
-            completions = getInitialCompletions(filter: currentWord)
-        case .afterSelect:
-            completions = getSelectCompletions(filter: currentWord)
-        case .afterFrom, .afterJoin, .afterUpdate, .afterInsertInto:
-            completions = getTableCompletions(filter: currentWord)
-        case .afterWhere, .afterOn, .afterSet:
-            completions = getColumnAndOperatorCompletions(filter: currentWord, text: prefix)
-        case .afterOrderBy, .afterGroupBy:
-            completions = getColumnCompletions(filter: currentWord, text: prefix)
-        case .afterCreate:
-            completions = getCreateCompletions(filter: currentWord)
-        case .afterValues:
-            completions = getValuesCompletions(filter: currentWord)
-        case .afterUsing:
-            completions = getColumnCompletions(filter: currentWord, text: prefix)
-        case .generic:
-            completions = getGenericCompletions(filter: currentWord, text: prefix)
-        }
-        
-        return completions
-    }
-    
     // MARK: - OpenAI API Completions
     
-    func getOpenAICompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
+    private func getOpenAICompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         guard let apiKey = openAIApiKey, !apiKey.isEmpty else {
             await MainActor.run { lastAPIError = "No OpenAI API key configured" }
-            return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
+            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
         }
         
         await MainActor.run { isLoading = true; lastAPIError = nil }
         defer { Task { @MainActor in isLoading = false } }
         
-        let prefix = String(text.prefix(cursorPosition))
-        let schemaContext = buildSchemaContext()
+        let ctx = smartEngine.parseCursorContext(text: text, cursorPosition: cursorPosition)
+        let schemaContext = smartEngine.buildRichSchemaContext()
+        let prompt: String
+        let systemPrompt: String
         
-        let prompt = """
-        Database Schema:
-        \(schemaContext)
-        
-        Current SQL (cursor at end):
-        \(prefix)
-        
-        Provide 5 completion suggestions in JSON format:
-        [{"text": "completion text", "description": "brief description"}]
-        
-        Only return the JSON array, nothing else. Use lowercase SQL.
-        """
+        if let comment = ctx.commentText, !comment.isEmpty {
+            // Smart comment mode: natural language -> SQL
+            systemPrompt = "You are a PostgreSQL expert. Convert natural language descriptions into SQL queries. You know the exact database schema. Return only valid JSON arrays. Use lowercase SQL keywords."
+            prompt = """
+            \(schemaContext)
+            
+            The user wrote this comment describing what they want:
+            -- \(comment)
+            
+            Generate 3-5 complete SQL queries that match this description. Return a JSON array:
+            [{"text": "complete SQL query", "description": "what this query does"}]
+            
+            Rules:
+            - Return ONLY the JSON array, nothing else
+            - Use lowercase SQL keywords
+            - Use actual table and column names from the schema above
+            - Each suggestion should be a complete, runnable query
+            - Vary the suggestions (different approaches or interpretations)
+            """
+        } else {
+            // Normal autocomplete mode
+            let queryContext = smartEngine.buildQueryContext(text: text, cursorPosition: cursorPosition)
+            systemPrompt = "You are a PostgreSQL SQL autocomplete assistant. You know the exact database schema. Return only valid JSON arrays. Use lowercase SQL keywords. Suggest completions that are contextually relevant."
+            prompt = """
+            \(schemaContext)
+            
+            \(queryContext)
+            
+            Provide 5 completion suggestions for the cursor position. Return a JSON array:
+            [{"text": "completion text to insert", "description": "brief description"}]
+            
+            Rules:
+            - Only return the JSON array, nothing else
+            - Use lowercase SQL keywords
+            - Suggest completions that continue from the cursor position
+            - Be aware of table relationships and column types
+            - For WHERE clauses, suggest relevant columns and operators
+            - For JOINs, suggest the likely join condition
+            """
+        }
         
         do {
-            let completions = try await callOpenAI(prompt: prompt, apiKey: apiKey)
-            let ruleBased = getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
-            return completions + ruleBased.prefix(10)
+            let apiCompletions = try await callOpenAI(prompt: prompt, systemPrompt: systemPrompt, apiKey: apiKey)
+            let smartResults = smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            return mergeCompletions(primary: apiCompletions, secondary: smartResults)
         } catch {
-            print("OpenAI API error: \(error)")
             await MainActor.run { lastAPIError = error.localizedDescription }
-            return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
+            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
         }
     }
     
-    private func callOpenAI(prompt: String, apiKey: String) async throws -> [SQLCompletion] {
+    private func callOpenAI(prompt: String, systemPrompt: String, apiKey: String) async throws -> [SQLCompletion] {
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -268,7 +170,7 @@ class SQLAutocompleteService: ObservableObject {
         let body: [String: Any] = [
             "model": "gpt-4o-mini",
             "messages": [
-                ["role": "system", "content": "You are a PostgreSQL SQL autocomplete assistant. Return only valid JSON arrays. Use lowercase SQL keywords."],
+                ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": prompt]
             ],
             "max_tokens": 500,
@@ -279,7 +181,6 @@ class SQLAutocompleteService: ObservableObject {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        // Check HTTP status
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
             let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
             throw AutocompleteAPIError.httpError(statusCode: httpResponse.statusCode, body: errorBody)
@@ -296,45 +197,129 @@ class SQLAutocompleteService: ObservableObject {
         return parseAPICompletions(content)
     }
     
+    // MARK: - Anthropic Model Fetching
+    
+    func fetchAnthropicModels() async {
+        guard let apiKey = anthropicApiKey, !apiKey.isEmpty else {
+            await MainActor.run {
+                availableAnthropicModels = []
+                lastAPIError = "No Anthropic API key configured"
+            }
+            return
+        }
+        
+        await MainActor.run { isFetchingModels = true; lastAPIError = nil }
+        defer { Task { @MainActor in isFetchingModels = false } }
+        
+        do {
+            let models = try await callAnthropicModels(apiKey: apiKey)
+            await MainActor.run {
+                availableAnthropicModels = models
+                if !models.isEmpty && !models.contains(where: { $0.id == anthropicModel }) {
+                    anthropicModel = models.first!.id
+                }
+            }
+        } catch {
+            print("Anthropic models fetch error: \(error)")
+            await MainActor.run { lastAPIError = error.localizedDescription }
+        }
+    }
+    
+    private func callAnthropicModels(apiKey: String) async throws -> [AnthropicModelInfo] {
+        let url = URL(string: "https://api.anthropic.com/v1/models?limit=100")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 10
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AutocompleteAPIError.httpError(statusCode: httpResponse.statusCode, body: errorBody)
+        }
+        
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelsArray = json["data"] as? [[String: Any]] else {
+            throw AutocompleteAPIError.invalidResponse
+        }
+        
+        return modelsArray.compactMap { model -> AnthropicModelInfo? in
+            guard let id = model["id"] as? String,
+                  let displayName = model["display_name"] as? String else { return nil }
+            return AnthropicModelInfo(id: id, displayName: displayName)
+        }
+    }
+    
     // MARK: - Anthropic API Completions
     
-    func getAnthropicCompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
+    private func getAnthropicCompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         guard let apiKey = anthropicApiKey, !apiKey.isEmpty else {
             await MainActor.run { lastAPIError = "No Anthropic API key configured" }
-            return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
+            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
         }
         
         await MainActor.run { isLoading = true; lastAPIError = nil }
         defer { Task { @MainActor in isLoading = false } }
         
-        let prefix = String(text.prefix(cursorPosition))
-        let schemaContext = buildSchemaContext()
+        let ctx = smartEngine.parseCursorContext(text: text, cursorPosition: cursorPosition)
+        let schemaContext = smartEngine.buildRichSchemaContext()
+        let prompt: String
+        let systemPrompt: String
         
-        let prompt = """
-        Database Schema:
-        \(schemaContext)
-        
-        Current SQL (cursor at end):
-        \(prefix)
-        
-        Provide 5 completion suggestions in JSON format:
-        [{"text": "completion text", "description": "brief description"}]
-        
-        Only return the JSON array, nothing else. Use lowercase SQL.
-        """
+        if let comment = ctx.commentText, !comment.isEmpty {
+            // Smart comment mode: natural language -> SQL
+            systemPrompt = "You are a PostgreSQL expert. Convert natural language descriptions into SQL queries. You know the exact database schema. Return only valid JSON arrays. Use lowercase SQL keywords."
+            prompt = """
+            \(schemaContext)
+            
+            The user wrote this comment describing what they want:
+            -- \(comment)
+            
+            Generate 3-5 complete SQL queries that match this description. Return a JSON array:
+            [{"text": "complete SQL query", "description": "what this query does"}]
+            
+            Rules:
+            - Return ONLY the JSON array, nothing else
+            - Use lowercase SQL keywords
+            - Use actual table and column names from the schema above
+            - Each suggestion should be a complete, runnable query
+            - Vary the suggestions (different approaches or interpretations)
+            """
+        } else {
+            // Normal autocomplete mode
+            let queryContext = smartEngine.buildQueryContext(text: text, cursorPosition: cursorPosition)
+            systemPrompt = "You are a PostgreSQL SQL autocomplete assistant. You know the exact database schema including column types, primary keys, and constraints. Return only valid JSON arrays of completion suggestions. Use lowercase SQL keywords. Suggest contextually relevant completions."
+            prompt = """
+            \(schemaContext)
+            
+            \(queryContext)
+            
+            Provide 5 completion suggestions for the cursor position. Return a JSON array:
+            [{"text": "completion text to insert", "description": "brief description"}]
+            
+            Rules:
+            - Only return the JSON array, nothing else
+            - Use lowercase SQL keywords
+            - Suggest completions that continue from the cursor position
+            - Be aware of table relationships and column types
+            - For WHERE clauses, suggest relevant columns and operators
+            - For JOINs, suggest the likely join condition
+            """
+        }
         
         do {
-            let completions = try await callAnthropic(prompt: prompt, apiKey: apiKey)
-            let ruleBased = getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
-            return completions + ruleBased.prefix(10)
+            let apiCompletions = try await callAnthropic(prompt: prompt, systemPrompt: systemPrompt, apiKey: apiKey)
+            let smartResults = smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            return mergeCompletions(primary: apiCompletions, secondary: smartResults)
         } catch {
-            print("Anthropic API error: \(error)")
             await MainActor.run { lastAPIError = error.localizedDescription }
-            return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
+            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
         }
     }
     
-    private func callAnthropic(prompt: String, apiKey: String) async throws -> [SQLCompletion] {
+    private func callAnthropic(prompt: String, systemPrompt: String, apiKey: String) async throws -> [SQLCompletion] {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -344,9 +329,9 @@ class SQLAutocompleteService: ObservableObject {
         request.timeoutInterval = 10
         
         let body: [String: Any] = [
-            "model": anthropicModel.rawValue,
+            "model": anthropicModel,
             "max_tokens": 500,
-            "system": "You are a PostgreSQL SQL autocomplete assistant. Return only valid JSON arrays of completion suggestions. Use lowercase SQL keywords.",
+            "system": "You are a PostgreSQL SQL autocomplete assistant. You know the exact database schema including column types, primary keys, and constraints. Return only valid JSON arrays of completion suggestions. Use lowercase SQL keywords. Suggest contextually relevant completions.",
             "messages": [
                 ["role": "user", "content": prompt]
             ]
@@ -356,7 +341,6 @@ class SQLAutocompleteService: ObservableObject {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        // Check HTTP status
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
             let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
             throw AutocompleteAPIError.httpError(statusCode: httpResponse.statusCode, body: errorBody)
@@ -372,8 +356,9 @@ class SQLAutocompleteService: ObservableObject {
         return parseAPICompletions(text)
     }
     
+    // MARK: - Response Parsing
+    
     private func parseAPICompletions(_ content: String) -> [SQLCompletion] {
-        // Try to extract JSON from the response
         guard let jsonStart = content.firstIndex(of: "["),
               let jsonEnd = content.lastIndex(of: "]") else {
             return []
@@ -389,216 +374,37 @@ class SQLAutocompleteService: ObservableObject {
             guard let text = suggestion["text"] else { return nil }
             return SQLCompletion(
                 text: text,
-                displayText: text.prefix(50) + (text.count > 50 ? "..." : ""),
+                displayText: String(text.prefix(50)) + (text.count > 50 ? "..." : ""),
                 type: .snippet,
                 detail: suggestion["description"]
             )
         }
     }
     
-    private func buildSchemaContext() -> String {
-        var context = "Tables: \(cachedTables.joined(separator: ", "))\n"
-        
-        for (table, columns) in cachedColumns.prefix(10) {
-            context += "\(table): \(columns.joined(separator: ", "))\n"
-        }
-        
-        return context
-    }
+    // MARK: - Merge & Dedup
     
-    // MARK: - Context Detection
-    
-    private func determineContext(_ text: String) -> CompletionContext {
-        let normalized = text.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let words = normalized.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+    /// Merges API completions with smart engine completions, deduplicating by text.
+    private func mergeCompletions(primary: [SQLCompletion], secondary: [SQLCompletion]) -> [SQLCompletion] {
+        var seen = Set<String>()
+        var merged: [SQLCompletion] = []
         
-        guard let lastKeyword = findLastKeyword(in: words) else {
-            return .initial
-        }
-        
-        switch lastKeyword {
-        case "SELECT", "SELECT DISTINCT":
-            return .afterSelect
-        case "FROM":
-            return .afterFrom
-        case "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN":
-            return .afterJoin
-        case "WHERE", "AND", "OR":
-            return .afterWhere
-        case "ORDER BY":
-            return .afterOrderBy
-        case "GROUP BY":
-            return .afterGroupBy
-        case "INSERT INTO":
-            return .afterInsertInto
-        case "UPDATE":
-            return .afterUpdate
-        case "SET":
-            return .afterSet
-        case "ON":
-            return .afterOn
-        case "USING":
-            return .afterUsing
-        case "VALUES":
-            return .afterValues
-        case "CREATE":
-            return .afterCreate
-        default:
-            return .generic
-        }
-    }
-    
-    private func findLastKeyword(in words: [String]) -> String? {
-        let multiWordKeywords = [
-            "SELECT DISTINCT", "INSERT INTO", "ORDER BY", "GROUP BY",
-            "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN"
-        ]
-        
-        for i in (0..<words.count).reversed() {
-            if i > 0 {
-                let twoWord = "\(words[i-1]) \(words[i])"
-                if multiWordKeywords.contains(twoWord) {
-                    return twoWord
-                }
+        for c in primary {
+            let key = c.text.lowercased()
+            if !seen.contains(key) {
+                seen.insert(key)
+                merged.append(c)
             }
         }
         
-        let singleKeywords = Set(["SELECT", "FROM", "WHERE", "AND", "OR", "JOIN", "ON", "SET", "UPDATE", "VALUES", "CREATE", "USING"])
-        for word in words.reversed() {
-            if singleKeywords.contains(word) {
-                return word
+        for c in secondary.prefix(15) {
+            let key = c.text.lowercased()
+            if !seen.contains(key) {
+                seen.insert(key)
+                merged.append(c)
             }
         }
         
-        return nil
-    }
-    
-    private func getCurrentWord(_ text: String) -> String {
-        let separators = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "(),;"))
-        let components = text.components(separatedBy: separators)
-        return components.last ?? ""
-    }
-    
-    // MARK: - Completion Generators
-    
-    private func getInitialCompletions(filter: String) -> [SQLCompletion] {
-        let statements = ["select", "insert", "update", "delete", "create", "alter", "drop", "with", "explain"]
-        return filterAndMap(statements, filter: filter, type: .keyword)
-    }
-    
-    private func getSelectCompletions(filter: String) -> [SQLCompletion] {
-        var completions: [SQLCompletion] = []
-        
-        if "*".lowercased().hasPrefix(filter.lowercased()) || filter.isEmpty {
-            completions.append(SQLCompletion(text: "*", displayText: "*", type: .symbol, detail: "Select all columns"))
-        }
-        
-        for (_, columns) in cachedColumns {
-            completions += filterAndMap(columns, filter: filter, type: .column)
-        }
-        
-        let aggregates = ["count", "sum", "avg", "min", "max", "array_agg", "string_agg"]
-        completions += filterAndMap(aggregates, filter: filter, type: .function)
-        completions += filterAndMap(["distinct"], filter: filter, type: .keyword)
-        
-        return completions
-    }
-    
-    private func getTableCompletions(filter: String) -> [SQLCompletion] {
-        var completions = filterAndMap(cachedTables, filter: filter, type: .table)
-        completions += filterAndMap(cachedSchemas.map { "\($0)." }, filter: filter, type: .schema)
-        return completions
-    }
-    
-    private func getColumnCompletions(filter: String, text: String) -> [SQLCompletion] {
-        var completions: [SQLCompletion] = []
-        let mentionedTables = extractTablesFromQuery(text)
-        
-        if !mentionedTables.isEmpty {
-            for table in mentionedTables {
-                if let columns = cachedColumns[table] {
-                    completions += filterAndMap(columns, filter: filter, type: .column)
-                    completions += filterAndMap(columns.map { "\(table).\($0)" }, filter: filter, type: .column)
-                }
-            }
-        } else {
-            for (table, columns) in cachedColumns {
-                completions += filterAndMap(columns.map { "\(table).\($0)" }, filter: filter, type: .column)
-            }
-        }
-        
-        return completions
-    }
-    
-    private func getColumnAndOperatorCompletions(filter: String, text: String) -> [SQLCompletion] {
-        var completions = getColumnCompletions(filter: filter, text: text)
-        
-        let operators = ["=", "<>", "!=", "<", ">", "<=", ">=", "like", "ilike", "in", "not in", "is null", "is not null", "between", "and", "or"]
-        completions += filterAndMap(operators, filter: filter, type: .operator)
-        
-        let functions = ["coalesce", "nullif", "lower", "upper", "trim", "length"]
-        completions += filterAndMap(functions, filter: filter, type: .function)
-        
-        return completions
-    }
-    
-    private func getCreateCompletions(filter: String) -> [SQLCompletion] {
-        let objects = ["table", "index", "view", "materialized view", "schema", "database", "sequence", "function", "trigger"]
-        return filterAndMap(objects, filter: filter, type: .keyword)
-    }
-    
-    private func getValuesCompletions(filter: String) -> [SQLCompletion] {
-        let placeholders = ["default", "null", "true", "false", "now()"]
-        return filterAndMap(placeholders, filter: filter, type: .keyword)
-    }
-    
-    private func getGenericCompletions(filter: String, text: String) -> [SQLCompletion] {
-        var completions: [SQLCompletion] = []
-        
-        completions += filterAndMap(Self.sqlKeywords, filter: filter, type: .keyword)
-        completions += filterAndMap(Self.sqlFunctions, filter: filter, type: .function)
-        completions += filterAndMap(cachedTables, filter: filter, type: .table)
-        completions += getColumnCompletions(filter: filter, text: text)
-        
-        return Array(completions.prefix(50))
-    }
-    
-    // MARK: - Helpers
-    
-    private func filterAndMap(_ items: [String], filter: String, type: SQLCompletionType) -> [SQLCompletion] {
-        let lowercaseFilter = filter.lowercased()
-        return items
-            .filter { lowercaseFilter.isEmpty || $0.lowercased().hasPrefix(lowercaseFilter) }
-            .map { SQLCompletion(text: $0, displayText: $0, type: type) }
-    }
-    
-    private func extractTablesFromQuery(_ text: String) -> [String] {
-        var tables: [String] = []
-        let normalized = text.uppercased()
-        
-        let patterns = [
-            "FROM\\s+([A-Z_][A-Z0-9_]*)",
-            "JOIN\\s+([A-Z_][A-Z0-9_]*)",
-            "UPDATE\\s+([A-Z_][A-Z0-9_]*)",
-            "INTO\\s+([A-Z_][A-Z0-9_]*)"
-        ]
-        
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                let matches = regex.matches(in: normalized, options: [], range: NSRange(location: 0, length: normalized.count))
-                for match in matches {
-                    if match.numberOfRanges > 1,
-                       let range = Range(match.range(at: 1), in: normalized) {
-                        let tableName = String(normalized[range]).lowercased()
-                        if cachedTables.contains(where: { $0.lowercased() == tableName }) {
-                            tables.append(cachedTables.first(where: { $0.lowercased() == tableName }) ?? tableName)
-                        }
-                    }
-                }
-            }
-        }
-        
-        return Array(Set(tables))
+        return merged
     }
 }
 
@@ -621,6 +427,7 @@ struct SQLCompletion: Identifiable, Equatable {
         case .operator: return "o"
         case .symbol: return "*"
         case .snippet: return ">"
+        case .value: return "v"
         }
     }
 }
@@ -634,6 +441,7 @@ enum SQLCompletionType {
     case `operator`
     case symbol
     case snippet
+    case value
 }
 
 enum AutocompleteAPIError: LocalizedError {
@@ -643,25 +451,17 @@ enum AutocompleteAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .httpError(let statusCode, let body):
-            // Try to parse a human-readable message from the JSON error body
             if let data = body.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                // Anthropic format: {"type":"error","error":{"type":"...","message":"..."}}
                 if let errorObj = json["error"] as? [String: Any],
                    let message = errorObj["message"] as? String {
                     return "\(statusCode): \(message)"
                 }
-                // OpenAI format: {"error":{"message":"...","type":"...","code":"..."}}
-                if let errorObj = json["error"] as? [String: Any],
-                   let message = errorObj["message"] as? String {
-                    return "\(statusCode): \(message)"
-                }
-                // Generic: {"message":"..."}
                 if let message = json["message"] as? String {
                     return "\(statusCode): \(message)"
                 }
             }
-            return "HTTP \(statusCode): \(body.prefix(200))"
+            return "HTTP \(statusCode): \(String(body.prefix(200)))"
         case .invalidResponse:
             return "Invalid API response format"
         }

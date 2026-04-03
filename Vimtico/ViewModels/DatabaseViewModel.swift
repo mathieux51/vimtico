@@ -78,6 +78,7 @@ class DatabaseViewModel: ObservableObject {
     @Published var autocompleteSuggestions: [SQLCompletion] = []
     @Published var showAutocompleteSuggestions: Bool = false
     @Published var selectedSuggestionIndex: Int = 0
+    @Published var cursorPosition: Int = 0
     @Published var cursorPositionAfterCompletion: Int? = nil
     
     // SQL validation
@@ -158,11 +159,19 @@ class DatabaseViewModel: ObservableObject {
     
     // MARK: - Autocomplete
     
-    func configureAutocomplete(mode: AutocompleteMode, openAIKey: String?, anthropicKey: String?, anthropicModel: AnthropicModel = .haiku) {
+    func configureAutocomplete(mode: AutocompleteMode, openAIKey: String?, anthropicKey: String?, anthropicModel: String? = nil) {
         autocompleteService.currentMode = mode
         autocompleteService.openAIApiKey = openAIKey
         autocompleteService.anthropicApiKey = anthropicKey
-        autocompleteService.anthropicModel = anthropicModel
+        if let model = anthropicModel {
+            autocompleteService.anthropicModel = model
+        }
+        // Fetch available models when Anthropic is configured with an API key
+        if mode == .anthropic, let key = anthropicKey, !key.isEmpty {
+            Task {
+                await autocompleteService.fetchAnthropicModels()
+            }
+        }
     }
     
     func requestAutocomplete(at cursorPosition: Int) {
@@ -192,26 +201,43 @@ class DatabaseViewModel: ObservableObject {
     }
     
     func applyAutocompletion(_ completion: SQLCompletion) {
-        // Find the current word to replace
-        let currentWord = getCurrentWordForReplacement()
+        // Find the current word to replace based on actual cursor position
+        let pos = min(cursorPosition, queryText.count)
+        let currentWord = getCurrentWordAtCursor(position: pos)
         if !currentWord.isEmpty {
-            // Replace the partial word with the completion
-            if let range = queryText.range(of: currentWord, options: .backwards) {
-                let insertionStart = queryText.distance(from: queryText.startIndex, to: range.lowerBound)
-                queryText.replaceSubrange(range, with: completion.text)
-                cursorPositionAfterCompletion = insertionStart + completion.text.count
-            }
+            // Find the word boundary before cursor
+            let wordStart = pos - currentWord.count
+            let startIdx = queryText.index(queryText.startIndex, offsetBy: wordStart)
+            let endIdx = queryText.index(queryText.startIndex, offsetBy: pos)
+            queryText.replaceSubrange(startIdx..<endIdx, with: completion.text)
+            cursorPositionAfterCompletion = wordStart + completion.text.count
         } else {
-            queryText += completion.text
-            cursorPositionAfterCompletion = queryText.count
+            // Insert at cursor position
+            let insertIdx = queryText.index(queryText.startIndex, offsetBy: pos)
+            queryText.insert(contentsOf: completion.text, at: insertIdx)
+            cursorPositionAfterCompletion = pos + completion.text.count
         }
         showAutocompleteSuggestions = false
     }
     
-    private func getCurrentWordForReplacement() -> String {
+    private func getCurrentWordAtCursor(position: Int) -> String {
         let separators = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "(),;"))
-        let components = queryText.components(separatedBy: separators)
-        return components.last ?? ""
+        let pos = min(position, queryText.count)
+        guard pos > 0 else { return "" }
+        
+        // Walk backwards from cursor to find word start
+        var startIdx = queryText.index(queryText.startIndex, offsetBy: pos)
+        while startIdx > queryText.startIndex {
+            let prevIdx = queryText.index(before: startIdx)
+            let ch = queryText[prevIdx]
+            if ch.unicodeScalars.allSatisfy({ separators.contains($0) }) {
+                break
+            }
+            startIdx = prevIdx
+        }
+        
+        let endIdx = queryText.index(queryText.startIndex, offsetBy: pos)
+        return String(queryText[startIdx..<endIdx])
     }
     
     func dismissAutocomplete() {
@@ -349,6 +375,7 @@ class DatabaseViewModel: ObservableObject {
                 )
                 
                 addToHistory(query: query, connectionId: connection.id, wasSuccessful: true)
+                autocompleteService.recordQuery(query, connectionId: connection.id)
             } catch is CancellationError {
                 let executionTime = Date().timeIntervalSince(startTime)
                 queryResult = QueryResult(
@@ -390,7 +417,12 @@ class DatabaseViewModel: ObservableObject {
         
         Task {
             let columns = await fetchColumns(for: table)
-            let stats = await postgresService.fetchTableStats(for: table)
+            var stats: (rowCount: Int?, tableSize: String?) = (nil, nil)
+            do {
+                stats = try await postgresService.fetchTableStats(for: table)
+            } catch {
+                errorMessage = "Failed to load table stats: \(error.localizedDescription)"
+            }
             
             tableInfo = TableSchemaInfo(
                 table: table,
@@ -435,6 +467,7 @@ class DatabaseViewModel: ObservableObject {
                 )
                 
                 addToHistory(query: query, connectionId: connection.id, wasSuccessful: true)
+                autocompleteService.recordQuery(query, connectionId: connection.id)
             } catch is CancellationError {
                 let executionTime = Date().timeIntervalSince(startTime)
                 queryResult = QueryResult(
@@ -501,14 +534,20 @@ class DatabaseViewModel: ObservableObject {
         do {
             tables = try await postgresService.fetchTables()
             
-            // Update autocomplete service with table names
-            autocompleteService.updateTables(tables.map { $0.name })
-            autocompleteService.updateSchemas(Array(Set(tables.map { $0.schema })))
-            
-            // Load columns for each table (for autocomplete)
-            for table in tables.prefix(20) { // Limit to first 20 tables for performance
+            // Load columns for all tables (rich metadata for smart autocomplete)
+            var columnsByTable: [String: [DatabaseColumn]] = [:]
+            for table in tables {
                 let columns = try await postgresService.fetchColumns(for: table)
-                autocompleteService.updateColumns(for: table.name, columns: columns.map { $0.name })
+                columnsByTable[table.name] = columns
+            }
+            
+            // Feed the smart engine with full schema + rich column data
+            autocompleteService.updateSchemaFromDatabase(tables: tables, columnsByTable: columnsByTable)
+            
+            // Wire up the fetchValues callback for value-based completions
+            let service = postgresService
+            autocompleteService.smartEngine.fetchValues = { tableName, columnName, limit in
+                await service.fetchDistinctValues(table: tableName, column: columnName, limit: limit)
             }
         } catch {
             errorMessage = "Failed to load tables: \(error.localizedDescription)"
@@ -520,8 +559,8 @@ class DatabaseViewModel: ObservableObject {
         
         do {
             let columns = try await postgresService.fetchColumns(for: table)
-            // Update autocomplete cache
-            autocompleteService.updateColumns(for: table.name, columns: columns.map { $0.name })
+            // Update autocomplete cache with rich column metadata
+            autocompleteService.updateRichColumns(for: table.name, columns: columns)
             return columns
         } catch {
             errorMessage = "Failed to load columns: \(error.localizedDescription)"
@@ -551,28 +590,42 @@ class DatabaseViewModel: ObservableObject {
     // MARK: - Persistence
     
     private func loadConnections() {
-        guard let data = UserDefaults.standard.data(forKey: connectionsKey),
-              let decoded = try? JSONDecoder().decode([DatabaseConnection].self, from: data) else {
+        guard let data = UserDefaults.standard.data(forKey: connectionsKey) else {
             return
         }
-        connections = decoded
+        do {
+            connections = try JSONDecoder().decode([DatabaseConnection].self, from: data)
+        } catch {
+            errorMessage = "Failed to load saved connections: \(error.localizedDescription)"
+        }
     }
     
     private func persistConnections() {
-        guard let encoded = try? JSONEncoder().encode(connections) else { return }
-        UserDefaults.standard.set(encoded, forKey: connectionsKey)
+        do {
+            let encoded = try JSONEncoder().encode(connections)
+            UserDefaults.standard.set(encoded, forKey: connectionsKey)
+        } catch {
+            errorMessage = "Failed to save connections: \(error.localizedDescription)"
+        }
     }
     
     private func loadHistory() {
-        guard let data = UserDefaults.standard.data(forKey: historyKey),
-              let decoded = try? JSONDecoder().decode([QueryHistoryItem].self, from: data) else {
+        guard let data = UserDefaults.standard.data(forKey: historyKey) else {
             return
         }
-        queryHistory = decoded
+        do {
+            queryHistory = try JSONDecoder().decode([QueryHistoryItem].self, from: data)
+        } catch {
+            errorMessage = "Failed to load query history: \(error.localizedDescription)"
+        }
     }
     
     private func persistHistory() {
-        guard let encoded = try? JSONEncoder().encode(queryHistory) else { return }
-        UserDefaults.standard.set(encoded, forKey: historyKey)
+        do {
+            let encoded = try JSONEncoder().encode(queryHistory)
+            UserDefaults.standard.set(encoded, forKey: historyKey)
+        } catch {
+            errorMessage = "Failed to save query history: \(error.localizedDescription)"
+        }
     }
 }

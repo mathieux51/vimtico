@@ -32,6 +32,7 @@ struct KeybindingsView: View {
                         ("Cmd + -", "Zoom out"),
                         ("Cmd + 0", "Reset zoom"),
                         ("Cmd + /", "Show keybindings"),
+                        ("Ctrl + G", "Go to line number"),
                     ])
                     
                     keybindingSection("Vim - Normal Mode", bindings: [
@@ -63,6 +64,7 @@ struct KeybindingsView: View {
                         ("gg", "Move to start of document"),
                         ("G", "Move to end of document"),
                         ("{count}G", "Go to line number"),
+                        (":N", "Go to line N (command mode)"),
                         ("f{char}", "Find char forward on line"),
                         ("F{char}", "Find char backward on line"),
                         ("t{char}", "Till char forward on line"),

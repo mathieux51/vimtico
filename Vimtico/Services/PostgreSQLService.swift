@@ -384,25 +384,32 @@ actor PostgreSQLService {
     
     /// Fetches approximate row count and table size using pg_stat and pg_class.
     /// Uses statistics rather than count(*) to avoid full table scans.
-    func fetchTableStats(for table: DatabaseTable) async -> (rowCount: Int?, tableSize: String?) {
-        do {
-            let sql = """
-            select
-                coalesce(s.n_live_tup, 0)::text as approx_row_count,
-                pg_size_pretty(pg_total_relation_size(c.oid)) as table_size
-            from pg_class c
-            join pg_namespace n on n.oid = c.relnamespace
-            left join pg_stat_user_tables s on s.relid = c.oid
-            where n.nspname = '\(table.schema)'
-                and c.relname = '\(table.name)'
-            """
-            let response = try await executeQuery(sql)
-            guard let row = response.rows.first, row.count >= 2 else {
-                return (nil, nil)
-            }
-            return (Int(row[0]), row[1])
-        } catch {
+    func fetchTableStats(for table: DatabaseTable) async throws -> (rowCount: Int?, tableSize: String?) {
+        let sql = """
+        select
+            coalesce(s.n_live_tup, 0)::text as approx_row_count,
+            pg_size_pretty(pg_total_relation_size(c.oid)) as table_size
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        left join pg_stat_user_tables s on s.relid = c.oid
+        where n.nspname = '\(table.schema)'
+            and c.relname = '\(table.name)'
+        """
+        let response = try await executeQuery(sql)
+        guard let row = response.rows.first, row.count >= 2 else {
             return (nil, nil)
+        }
+        return (Int(row[0]), row[1])
+    }
+    
+    /// Fetch distinct values for a column in a table (used for autocomplete value suggestions)
+    func fetchDistinctValues(table: String, column: String, limit: Int = 50) async -> [String] {
+        do {
+            let sql = "select distinct \"\(column)\" from \"\(table)\" where \"\(column)\" is not null order by \"\(column)\" limit \(limit)"
+            let response = try await executeQuery(sql)
+            return response.rows.compactMap { $0.first }
+        } catch {
+            return []
         }
     }
     
