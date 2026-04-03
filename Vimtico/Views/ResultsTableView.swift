@@ -34,12 +34,20 @@ struct ResultsTableView: View {
                         fontSize: resultsFontSize,
                         selectedRow: viewModel.selectedResultRow,
                         selectedColumn: viewModel.selectedResultColumn,
-                        isFocused: viewModel.focusedPane == .results
+                        isFocused: viewModel.focusedPane == .results,
+                        visualRowRange: viewModel.visualRowRange,
+                        visualColumnRange: viewModel.visualColumnRange
                     )
                 }
                 
                 // Status bar
-                StatusBar(result: result, theme: themeManager.currentTheme, fontSize: resultsFontSize)
+                StatusBar(
+                    result: result,
+                    theme: themeManager.currentTheme,
+                    fontSize: resultsFontSize,
+                    resultsVimMode: viewModel.resultsVimMode,
+                    isFocused: viewModel.focusedPane == .results
+                )
             } else if let info = viewModel.tableInfo {
                 TableInfoView(
                     info: info,
@@ -99,6 +107,8 @@ struct ResultsTable: View {
     var selectedRow: Int? = nil
     var selectedColumn: Int = 0
     var isFocused: Bool = false
+    var visualRowRange: ClosedRange<Int>? = nil
+    var visualColumnRange: ClosedRange<Int>? = nil
     
     /// Compute a fixed width per column based on the longest value (header or data).
     private var columnWidths: [CGFloat] {
@@ -127,6 +137,7 @@ struct ResultsTable: View {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         Section {
                             ForEach(Array(result.rows.enumerated()), id: \.offset) { index, row in
+                                let isInVisualRow = visualRowRange?.contains(index) ?? false
                                 ResultRow(
                                     rowIndex: index,
                                     columns: result.columns,
@@ -135,6 +146,8 @@ struct ResultsTable: View {
                                     isAlternate: index % 2 == 1,
                                     isSelected: isFocused && selectedRow == index,
                                     selectedColumn: isFocused ? selectedColumn : nil,
+                                    isInVisualSelection: isFocused && isInVisualRow,
+                                    visualColumnRange: isFocused ? visualColumnRange : nil,
                                     theme: theme,
                                     fontSize: fontSize
                                 )
@@ -216,6 +229,8 @@ struct ResultRow: View {
     let isAlternate: Bool
     var isSelected: Bool = false
     var selectedColumn: Int? = nil
+    var isInVisualSelection: Bool = false
+    var visualColumnRange: ClosedRange<Int>? = nil
     let theme: Theme
     let fontSize: CGFloat
     @State private var copiedIndex: Int? = nil
@@ -223,47 +238,78 @@ struct ResultRow: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(columns.enumerated()), id: \.offset) { index, _ in
-                let value = index < values.count ? values[index] : ""
-                let isCellSelected = isSelected && selectedColumn == index
-                Text(copiedIndex == index ? "Copied!" : value)
-                    .font(.system(size: fontSize, design: .monospaced))
-                    .foregroundColor(copiedIndex == index ? theme.successColor : (value == "NULL" ? theme.commentColor : theme.foregroundColor))
-                    .frame(width: index < columnWidths.count ? columnWidths[index] : 100, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .lineLimit(1)
-                    .background(
-                        isCellSelected ? theme.accentColor.opacity(0.35) :
-                        (isSelected ? theme.editorSelectionColor.opacity(0.15) :
-                        Color.clear)
-                    )
-                    .overlay(
-                        isCellSelected ?
-                        RoundedRectangle(cornerRadius: 2)
-                            .stroke(theme.accentColor.opacity(0.8), lineWidth: 2)
-                        : nil
-                    )
-                    .contentShape(Rectangle())
-                    .id("cell-\(rowIndex)-\(index)")
-                    .onTapGesture {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(value, forType: .string)
-                        copiedIndex = index
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                            if copiedIndex == index {
-                                copiedIndex = nil
-                            }
-                        }
-                    }
+                cellView(at: index)
                 
                 Divider()
                     .background(theme.borderColor)
             }
         }
-        .background(
-            isSelected ? theme.editorSelectionColor.opacity(0.15) :
-            (isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor)
-        )
+        .background(rowBackground)
+    }
+    
+    private var rowBackground: Color {
+        if isInVisualSelection && visualColumnRange == nil {
+            return theme.accentColor.opacity(0.2)
+        }
+        if isSelected {
+            return theme.editorSelectionColor.opacity(0.15)
+        }
+        return isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor
+    }
+    
+    private func cellBackground(isCellSelected: Bool, isVisualCell: Bool) -> Color {
+        if isCellSelected {
+            return theme.accentColor.opacity(0.35)
+        }
+        if isVisualCell {
+            return theme.accentColor.opacity(0.2)
+        }
+        if isSelected {
+            return theme.editorSelectionColor.opacity(0.15)
+        }
+        return Color.clear
+    }
+    
+    private func cellForeground(value: String, isCopied: Bool) -> Color {
+        if isCopied { return theme.successColor }
+        if value == "NULL" { return theme.commentColor }
+        return theme.foregroundColor
+    }
+    
+    @ViewBuilder
+    private func cellView(at index: Int) -> some View {
+        let value = index < values.count ? values[index] : ""
+        let isCellSelected = isSelected && selectedColumn == index
+        let isVisualCell = isInVisualSelection && (visualColumnRange == nil || visualColumnRange!.contains(index))
+        let isCopied = copiedIndex == index
+        let width: CGFloat = index < columnWidths.count ? columnWidths[index] : 100
+        
+        Text(isCopied ? "Copied!" : value)
+            .font(.system(size: fontSize, design: .monospaced))
+            .foregroundColor(cellForeground(value: value, isCopied: isCopied))
+            .frame(width: width, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .lineLimit(1)
+            .background(cellBackground(isCellSelected: isCellSelected, isVisualCell: isVisualCell))
+            .overlay(
+                isCellSelected ?
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(theme.accentColor.opacity(0.8), lineWidth: 2)
+                : nil
+            )
+            .contentShape(Rectangle())
+            .id("cell-\(rowIndex)-\(index)")
+            .onTapGesture {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(value, forType: .string)
+                copiedIndex = index
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    if copiedIndex == index {
+                        copiedIndex = nil
+                    }
+                }
+            }
     }
 }
 
@@ -271,9 +317,19 @@ struct StatusBar: View {
     let result: QueryResult
     let theme: Theme
     let fontSize: CGFloat
+    var resultsVimMode: ResultsVimMode = .normal
+    var isFocused: Bool = false
     
     var body: some View {
         HStack {
+            // Visual mode indicator
+            if isFocused && resultsVimMode != .normal {
+                Text("-- \(resultsVimMode.rawValue) --")
+                    .font(.system(size: max(fontSize - 2, 10), weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.keywordColor)
+                    .padding(.trailing, 4)
+            }
+            
             Image(systemName: result.isSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
                 .foregroundColor(result.isSuccess ? theme.successColor : theme.errorColor)
             

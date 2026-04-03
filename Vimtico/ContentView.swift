@@ -135,6 +135,8 @@ struct ContentView: View {
         
         if viewModel.awaitingPaneSwitch {
             viewModel.awaitingPaneSwitch = false
+            // Exit results visual mode when leaving results pane
+            viewModel.exitResultsVisualMode()
             switch event.charactersIgnoringModifiers {
             case "h":
                 viewModel.focusedPane = .sidebar
@@ -181,6 +183,14 @@ struct ContentView: View {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if mods.contains(.command) { return event }
         
+        // Escape exits visual mode (or cancels filter)
+        if event.keyCode == 53 {
+            if viewModel.resultsVimMode != .normal {
+                viewModel.exitResultsVisualMode()
+                return nil
+            }
+        }
+        
         // If filtering, handle text input for filter
         if viewModel.isResultsFiltering {
             return handleFilterKey(event, filterText: $viewModel.resultsFilterText, isFiltering: $viewModel.isResultsFiltering)
@@ -213,10 +223,20 @@ struct ContentView: View {
             return nil
         }
         
+        // Ctrl+V enters/exits visual block mode
+        if mods.contains(.control) && event.charactersIgnoringModifiers == "v" {
+            if viewModel.resultsVimMode == .visualBlock {
+                viewModel.exitResultsVisualMode()
+            } else {
+                viewModel.enterVisualBlockMode()
+            }
+            return nil
+        }
+        
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         
-        // "/" to start or resume filtering
-        if chars == "/" {
+        // "/" to start or resume filtering (not in visual mode)
+        if chars == "/" && viewModel.resultsVimMode == .normal {
             viewModel.isResultsFiltering = true
             return nil
         }
@@ -228,6 +248,18 @@ struct ContentView: View {
             let colCount = result.columns.count
             if rowCount > 0 {
                 switch chars {
+                case "V":
+                    // V enters/exits visual line mode
+                    if viewModel.resultsVimMode == .visualLine {
+                        viewModel.exitResultsVisualMode()
+                    } else {
+                        viewModel.enterVisualLineMode()
+                    }
+                case "v":
+                    // v exits visual mode if active (like vim)
+                    if viewModel.resultsVimMode != .normal {
+                        viewModel.exitResultsVisualMode()
+                    }
                 case "j":
                     let current = viewModel.selectedResultRow ?? -1
                     viewModel.selectedResultRow = min(current + 1, rowCount - 1)
@@ -249,12 +281,22 @@ struct ContentView: View {
                 case "G":
                     viewModel.selectedResultRow = rowCount - 1
                 case "y":
-                    // Copy selected cell if both row and column are selected, otherwise copy full row
-                    if let row = viewModel.selectedResultRow, row < rows.count {
-                        let cellText = rows[row][viewModel.selectedResultColumn]
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(cellText, forType: .string)
-                        viewModel.flashCopiedFeedback()
+                    if viewModel.resultsVimMode != .normal {
+                        // Yank visual selection
+                        if let text = viewModel.yankVisualSelection(rows: rows, columns: result.columns) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(text, forType: .string)
+                            viewModel.flashCopiedFeedback()
+                        }
+                        viewModel.exitResultsVisualMode()
+                    } else {
+                        // Copy selected cell
+                        if let row = viewModel.selectedResultRow, row < rows.count {
+                            let cellText = rows[row][viewModel.selectedResultColumn]
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(cellText, forType: .string)
+                            viewModel.flashCopiedFeedback()
+                        }
                     }
                 default:
                     break

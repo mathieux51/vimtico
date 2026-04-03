@@ -8,6 +8,12 @@ enum FocusPane: String, CaseIterable {
     case results
 }
 
+enum ResultsVimMode: String {
+    case normal = "NORMAL"
+    case visualLine = "V-LINE"
+    case visualBlock = "V-BLOCK"
+}
+
 enum ValidationStatus: Equatable {
     case idle
     case validating
@@ -41,6 +47,11 @@ class DatabaseViewModel: ObservableObject {
     @Published var selectedResultRow: Int? = nil
     @Published var selectedResultColumn: Int = 0
     
+    // Results visual mode (V for visual line, Ctrl+V for visual block)
+    @Published var resultsVimMode: ResultsVimMode = .normal
+    @Published var visualAnchorRow: Int? = nil
+    @Published var visualAnchorColumn: Int = 0
+    
     // Sidebar navigation
     @Published var selectedTableIndex: Int = 0
     
@@ -65,6 +76,78 @@ class DatabaseViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             showCopiedFeedback = false
         }
+    }
+    
+    // MARK: - Visual Selection Helpers
+    
+    /// Row range covered by the visual selection (visual line or visual block).
+    var visualRowRange: ClosedRange<Int>? {
+        guard resultsVimMode != .normal,
+              let anchor = visualAnchorRow,
+              let current = selectedResultRow else { return nil }
+        return min(anchor, current)...max(anchor, current)
+    }
+    
+    /// Column range covered by the visual block selection. Nil for visual line (all columns).
+    var visualColumnRange: ClosedRange<Int>? {
+        guard resultsVimMode == .visualBlock,
+              visualAnchorRow != nil else { return nil }
+        return min(visualAnchorColumn, selectedResultColumn)...max(visualAnchorColumn, selectedResultColumn)
+    }
+    
+    /// Exit visual mode, keeping cursor at current position.
+    func exitResultsVisualMode() {
+        resultsVimMode = .normal
+        visualAnchorRow = nil
+        visualAnchorColumn = 0
+    }
+    
+    /// Enter visual line mode from current cursor position.
+    func enterVisualLineMode() {
+        let row = selectedResultRow ?? 0
+        selectedResultRow = row
+        visualAnchorRow = row
+        resultsVimMode = .visualLine
+    }
+    
+    /// Enter visual block mode from current cursor position.
+    func enterVisualBlockMode() {
+        let row = selectedResultRow ?? 0
+        selectedResultRow = row
+        visualAnchorRow = row
+        visualAnchorColumn = selectedResultColumn
+        resultsVimMode = .visualBlock
+    }
+    
+    /// Build tab-separated text for the current visual selection.
+    func yankVisualSelection(rows: [[String]], columns: [String]) -> String? {
+        guard let rowRange = visualRowRange else { return nil }
+        
+        var lines: [String] = []
+        
+        switch resultsVimMode {
+        case .visualLine:
+            // Copy all columns for each selected row, with header
+            lines.append(columns.joined(separator: "\t"))
+            for r in rowRange {
+                guard r < rows.count else { continue }
+                lines.append(rows[r].joined(separator: "\t"))
+            }
+        case .visualBlock:
+            guard let colRange = visualColumnRange else { return nil }
+            // Copy only the selected columns for each selected row, with header
+            let headerSlice = colRange.compactMap { c in c < columns.count ? columns[c] : nil }
+            lines.append(headerSlice.joined(separator: "\t"))
+            for r in rowRange {
+                guard r < rows.count else { continue }
+                let slice = colRange.compactMap { c in c < rows[r].count ? rows[r][c] : nil }
+                lines.append(slice.joined(separator: "\t"))
+            }
+        case .normal:
+            return nil
+        }
+        
+        return lines.joined(separator: "\n")
     }
     
     // Pane navigation (Ctrl-w sequence)
