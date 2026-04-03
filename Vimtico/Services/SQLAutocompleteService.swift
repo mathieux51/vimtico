@@ -1,15 +1,17 @@
 import Foundation
 
 /// SQL Autocomplete service that provides context-aware suggestions
-/// Supports multiple modes: Rule-based, Local ML, and API-based
+/// Supports multiple modes: Rule-based, and API-based (OpenAI, Anthropic)
 class SQLAutocompleteService: ObservableObject {
     
     @Published var isLoading: Bool = false
     @Published var currentMode: AutocompleteMode = .ruleBased
+    @Published var lastAPIError: String?
     
     // API Keys
     var openAIApiKey: String?
     var anthropicApiKey: String?
+    var anthropicModel: AnthropicModel = .haiku
     
     // MARK: - SQL Keywords
     
@@ -177,8 +179,6 @@ class SQLAutocompleteService: ObservableObject {
             return []
         case .ruleBased:
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
-        case .localML:
-            return await getLocalMLCompletions(text: text, cursorPosition: cursorPosition)
         case .openAI:
             return await getOpenAICompletions(text: text, cursorPosition: cursorPosition)
         case .anthropic:
@@ -219,92 +219,21 @@ class SQLAutocompleteService: ObservableObject {
         return completions
     }
     
-    // MARK: - Local ML Completions (using MLX)
-    
-    func getLocalMLCompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
-        // First get rule-based as fallback/base
-        var completions = getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
-        
-        // TODO: Integrate with MLX for smarter completions
-        // For now, we enhance rule-based with some smart snippets
-        let prefix = String(text.prefix(cursorPosition))
-        let smartSnippets = generateSmartSnippets(prefix: prefix)
-        
-        // Insert smart snippets at the beginning
-        completions.insert(contentsOf: smartSnippets, at: 0)
-        
-        return completions
-    }
-    
-    private func generateSmartSnippets(prefix: String) -> [SQLCompletion] {
-        var snippets: [SQLCompletion] = []
-        let normalized = prefix.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Common SQL patterns as snippets
-        if normalized.isEmpty || normalized.hasSuffix(";") {
-            snippets.append(SQLCompletion(
-                text: "select * from ${1:table_name} where ${2:condition};",
-                displayText: "select * from ... where ...",
-                type: .snippet,
-                detail: "Basic SELECT with WHERE clause"
-            ))
-            snippets.append(SQLCompletion(
-                text: "select ${1:columns}\nfrom ${2:table}\njoin ${3:other_table} on ${4:condition}\nwhere ${5:filter};",
-                displayText: "select ... join ... where ...",
-                type: .snippet,
-                detail: "SELECT with JOIN"
-            ))
-            snippets.append(SQLCompletion(
-                text: "insert into ${1:table} (${2:columns})\nvalues (${3:values});",
-                displayText: "insert into ... values ...",
-                type: .snippet,
-                detail: "Basic INSERT statement"
-            ))
-            snippets.append(SQLCompletion(
-                text: "update ${1:table}\nset ${2:column} = ${3:value}\nwhere ${4:condition};",
-                displayText: "update ... set ... where ...",
-                type: .snippet,
-                detail: "Basic UPDATE statement"
-            ))
-        }
-        
-        if normalized.contains("SELECT") && !normalized.contains("FROM") {
-            snippets.append(SQLCompletion(
-                text: "from ${1:table_name}",
-                displayText: "from table_name",
-                type: .snippet,
-                detail: "Add FROM clause"
-            ))
-        }
-        
-        if normalized.contains("FROM") && !normalized.contains("WHERE") && !normalized.contains("ORDER") {
-            snippets.append(SQLCompletion(
-                text: "where ${1:column} = ${2:value}",
-                displayText: "where column = value",
-                type: .snippet,
-                detail: "Add WHERE clause"
-            ))
-        }
-        
-        return snippets
-    }
-    
     // MARK: - OpenAI API Completions
     
     func getOpenAICompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         guard let apiKey = openAIApiKey, !apiKey.isEmpty else {
+            await MainActor.run { lastAPIError = "No OpenAI API key configured" }
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
         }
         
-        await MainActor.run { isLoading = true }
+        await MainActor.run { isLoading = true; lastAPIError = nil }
         defer { Task { @MainActor in isLoading = false } }
         
         let prefix = String(text.prefix(cursorPosition))
         let schemaContext = buildSchemaContext()
         
         let prompt = """
-        You are a PostgreSQL SQL autocomplete assistant. Given the current SQL query prefix and database schema, suggest completions.
-        
         Database Schema:
         \(schemaContext)
         
@@ -314,16 +243,16 @@ class SQLAutocompleteService: ObservableObject {
         Provide 5 completion suggestions in JSON format:
         [{"text": "completion text", "description": "brief description"}]
         
-        Only return the JSON array, nothing else.
+        Only return the JSON array, nothing else. Use lowercase SQL.
         """
         
         do {
             let completions = try await callOpenAI(prompt: prompt, apiKey: apiKey)
-            // Combine with rule-based for better coverage
             let ruleBased = getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
             return completions + ruleBased.prefix(10)
         } catch {
             print("OpenAI API error: \(error)")
+            await MainActor.run { lastAPIError = "\(error)" }
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
         }
     }
@@ -334,11 +263,12 @@ class SQLAutocompleteService: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
         
         let body: [String: Any] = [
             "model": "gpt-4o-mini",
             "messages": [
-                ["role": "system", "content": "You are a PostgreSQL SQL autocomplete assistant. Return only valid JSON arrays."],
+                ["role": "system", "content": "You are a PostgreSQL SQL autocomplete assistant. Return only valid JSON arrays. Use lowercase SQL keywords."],
                 ["role": "user", "content": prompt]
             ],
             "max_tokens": 500,
@@ -347,14 +277,20 @@ class SQLAutocompleteService: ObservableObject {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check HTTP status
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AutocompleteAPIError.httpError(statusCode: httpResponse.statusCode, body: errorBody)
+        }
         
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let message = firstChoice["message"] as? [String: Any],
               let content = message["content"] as? String else {
-            return []
+            throw AutocompleteAPIError.invalidResponse
         }
         
         return parseAPICompletions(content)
@@ -364,18 +300,17 @@ class SQLAutocompleteService: ObservableObject {
     
     func getAnthropicCompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         guard let apiKey = anthropicApiKey, !apiKey.isEmpty else {
+            await MainActor.run { lastAPIError = "No Anthropic API key configured" }
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
         }
         
-        await MainActor.run { isLoading = true }
+        await MainActor.run { isLoading = true; lastAPIError = nil }
         defer { Task { @MainActor in isLoading = false } }
         
         let prefix = String(text.prefix(cursorPosition))
         let schemaContext = buildSchemaContext()
         
         let prompt = """
-        You are a PostgreSQL SQL autocomplete assistant. Given the current SQL query prefix and database schema, suggest completions.
-        
         Database Schema:
         \(schemaContext)
         
@@ -385,7 +320,7 @@ class SQLAutocompleteService: ObservableObject {
         Provide 5 completion suggestions in JSON format:
         [{"text": "completion text", "description": "brief description"}]
         
-        Only return the JSON array, nothing else.
+        Only return the JSON array, nothing else. Use lowercase SQL.
         """
         
         do {
@@ -394,6 +329,7 @@ class SQLAutocompleteService: ObservableObject {
             return completions + ruleBased.prefix(10)
         } catch {
             print("Anthropic API error: \(error)")
+            await MainActor.run { lastAPIError = "\(error)" }
             return getRuleBasedCompletions(text: text, cursorPosition: cursorPosition)
         }
     }
@@ -405,10 +341,12 @@ class SQLAutocompleteService: ObservableObject {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
         
         let body: [String: Any] = [
-            "model": "claude-3-haiku-20240307",
+            "model": anthropicModel.rawValue,
             "max_tokens": 500,
+            "system": "You are a PostgreSQL SQL autocomplete assistant. Return only valid JSON arrays of completion suggestions. Use lowercase SQL keywords.",
             "messages": [
                 ["role": "user", "content": prompt]
             ]
@@ -416,13 +354,19 @@ class SQLAutocompleteService: ObservableObject {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check HTTP status
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AutocompleteAPIError.httpError(statusCode: httpResponse.statusCode, body: errorBody)
+        }
         
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = json["content"] as? [[String: Any]],
               let firstContent = content.first,
               let text = firstContent["text"] as? String else {
-            return []
+            throw AutocompleteAPIError.invalidResponse
         }
         
         return parseAPICompletions(text)
@@ -690,4 +634,18 @@ enum SQLCompletionType {
     case `operator`
     case symbol
     case snippet
+}
+
+enum AutocompleteAPIError: LocalizedError {
+    case httpError(statusCode: Int, body: String)
+    case invalidResponse
+    
+    var errorDescription: String? {
+        switch self {
+        case .httpError(let statusCode, let body):
+            return "HTTP \(statusCode): \(body.prefix(200))"
+        case .invalidResponse:
+            return "Invalid API response format"
+        }
+    }
 }

@@ -12,7 +12,7 @@ Vimtico is a free, open-source macOS application for working with PostgreSQL dat
 - Cell-based Vim navigation in query results (j/k/h/l, y to copy)
 - Nord theme (dark and light variants) with custom theme support
 - SQL syntax highlighting and validation via EXPLAIN
-- Autocomplete: rule-based, local ML (MLX), or API-based (OpenAI/Anthropic)
+- Autocomplete: rule-based (offline) or API-based (OpenAI, Anthropic Claude)
 - Connection management with auto-reconnect
 - Schema browser with table info (columns, types, nullable, defaults, PKs, row count, size)
 - Resizable editor/results pane with draggable divider

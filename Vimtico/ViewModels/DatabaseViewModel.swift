@@ -93,6 +93,7 @@ class DatabaseViewModel: ObservableObject {
     private let savedQueryTextKey = "savedQueryText"
     private var runningQueryTask: Task<Void, Never>?
     private var validationTask: Task<Void, Never>?
+    private var autocompleteTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Filtered lists
@@ -157,22 +158,37 @@ class DatabaseViewModel: ObservableObject {
     
     // MARK: - Autocomplete
     
-    func configureAutocomplete(mode: AutocompleteMode, openAIKey: String?, anthropicKey: String?) {
+    func configureAutocomplete(mode: AutocompleteMode, openAIKey: String?, anthropicKey: String?, anthropicModel: AnthropicModel = .haiku) {
         autocompleteService.currentMode = mode
         autocompleteService.openAIApiKey = openAIKey
         autocompleteService.anthropicApiKey = anthropicKey
+        autocompleteService.anthropicModel = anthropicModel
     }
     
-    func requestAutocomplete(at cursorPosition: Int) async {
+    func requestAutocomplete(at cursorPosition: Int) {
         guard autocompleteService.currentMode != .disabled else {
             showAutocompleteSuggestions = false
             return
         }
         
-        let suggestions = await autocompleteService.getCompletions(text: queryText, cursorPosition: cursorPosition)
-        autocompleteSuggestions = suggestions
-        showAutocompleteSuggestions = !suggestions.isEmpty
-        selectedSuggestionIndex = 0
+        // Cancel any in-flight autocomplete request
+        autocompleteTask?.cancel()
+        
+        let useDebounce = autocompleteService.currentMode.usesAPI
+        
+        autocompleteTask = Task { @MainActor in
+            // Debounce API calls to avoid hammering on every keystroke
+            if useDebounce {
+                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                guard !Task.isCancelled else { return }
+            }
+            
+            let suggestions = await autocompleteService.getCompletions(text: queryText, cursorPosition: cursorPosition)
+            guard !Task.isCancelled else { return }
+            autocompleteSuggestions = suggestions
+            showAutocompleteSuggestions = !suggestions.isEmpty
+            selectedSuggestionIndex = 0
+        }
     }
     
     func applyAutocompletion(_ completion: SQLCompletion) {

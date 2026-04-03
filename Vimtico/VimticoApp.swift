@@ -573,6 +573,22 @@ struct AutocompleteSettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 280)
                     }
+                    SettingRow("Model") {
+                        Picker("", selection: Binding(
+                            get: { configManager.configuration.editor?.effectiveAnthropicModel ?? .haiku },
+                            set: { newValue in
+                                ensureEditorConfig()
+                                configManager.configuration.editor?.anthropicModel = newValue
+                                configManager.saveConfiguration()
+                            }
+                        )) {
+                            ForEach(AnthropicModel.allCases, id: \.self) { model in
+                                Text(model.displayName).tag(model)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 240)
+                    }
                 }
             }
             

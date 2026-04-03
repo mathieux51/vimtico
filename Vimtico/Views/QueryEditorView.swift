@@ -32,16 +32,37 @@ struct QueryEditorView: View {
                 // Autocomplete mode indicator
                 if viewModel.autocompleteService.currentMode != .disabled {
                     HStack(spacing: 4) {
-                        Image(systemName: "sparkles")
-                            .font(.caption)
+                        if viewModel.autocompleteService.isLoading {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                                .frame(width: 12, height: 12)
+                        } else if viewModel.autocompleteService.lastAPIError != nil {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(themeManager.currentTheme.errorColor)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .font(.caption)
+                        }
                         Text(viewModel.autocompleteService.currentMode.rawValue)
                             .font(.caption)
                     }
-                    .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.6))
+                    .foregroundColor(
+                        viewModel.autocompleteService.lastAPIError != nil
+                            ? themeManager.currentTheme.errorColor
+                            : themeManager.currentTheme.foregroundColor.opacity(0.6)
+                    )
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(themeManager.currentTheme.secondaryBackgroundColor.opacity(0.5))
                     .cornerRadius(4)
+                    .help(viewModel.autocompleteService.lastAPIError ?? viewModel.autocompleteService.currentMode.displayName)
+                    .onTapGesture {
+                        if let error = viewModel.autocompleteService.lastAPIError {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(error, forType: .string)
+                        }
+                    }
                 }
                 
                 // Validation status indicator
@@ -90,17 +111,13 @@ struct QueryEditorView: View {
                         viewModel.dismissAutocomplete()
                     },
                     onTab: {
-                        Task {
-                            await viewModel.requestAutocomplete(at: viewModel.queryText.count)
-                        }
+                        viewModel.requestAutocomplete(at: viewModel.queryText.count)
                     }
                 )
                 .frame(minHeight: 100)
                 .onChange(of: viewModel.queryText) { _, newValue in
-                    // Request autocomplete on text change
-                    Task {
-                        await viewModel.requestAutocomplete(at: newValue.count)
-                    }
+                    // Request autocomplete on text change (debounced for API modes)
+                    viewModel.requestAutocomplete(at: newValue.count)
                     // Schedule debounced SQL validation
                     viewModel.scheduleValidation()
                 }
@@ -122,6 +139,34 @@ struct QueryEditorView: View {
                     .padding(.top, autocompleteTopOffset)
                     .padding(.leading, 16)
                     .zIndex(100)
+                }
+            }
+            
+            // API error bar
+            if let apiError = viewModel.autocompleteService.lastAPIError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(themeManager.currentTheme.errorColor)
+                        .font(.caption)
+                    Text("Autocomplete: \(apiError)")
+                        .font(.system(size: max(viewModel.fontSize - 2, 10), design: .monospaced))
+                        .foregroundColor(themeManager.currentTheme.errorColor)
+                        .lineLimit(2)
+                    Spacer()
+                    Button("Dismiss") {
+                        viewModel.autocompleteService.lastAPIError = nil
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.6))
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .background(themeManager.currentTheme.errorColor.opacity(0.1))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(apiError, forType: .string)
                 }
             }
             
@@ -213,7 +258,8 @@ struct QueryEditorView: View {
             let mode = configManager.configuration.editor?.autocompleteMode ?? .ruleBased
             let openAIKey = configManager.configuration.editor?.openAIApiKey
             let anthropicKey = configManager.configuration.editor?.anthropicApiKey
-            viewModel.configureAutocomplete(mode: mode, openAIKey: openAIKey, anthropicKey: anthropicKey)
+            let anthropicModel = configManager.configuration.editor?.effectiveAnthropicModel ?? .haiku
+            viewModel.configureAutocomplete(mode: mode, openAIKey: openAIKey, anthropicKey: anthropicKey, anthropicModel: anthropicModel)
         }
     }
 }

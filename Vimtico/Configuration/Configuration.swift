@@ -46,6 +46,7 @@ struct EditorConfig: Codable {
     var autocompleteMode: AutocompleteMode
     var openAIApiKey: String?
     var anthropicApiKey: String?
+    var anthropicModel: AnthropicModel?
     
     static let minFontSize = 8
     static let maxFontSize = 72
@@ -54,6 +55,11 @@ struct EditorConfig: Codable {
     /// The effective font size, falling back to the default if not set.
     var effectiveFontSize: Int {
         fontSize ?? Self.defaultFontSize
+    }
+    
+    /// The effective Anthropic model, falling back to Haiku.
+    var effectiveAnthropicModel: AnthropicModel {
+        anthropicModel ?? .haiku
     }
     
     init(
@@ -65,7 +71,8 @@ struct EditorConfig: Codable {
         showLineNumbers: Bool = true,
         autocompleteMode: AutocompleteMode = .ruleBased,
         openAIApiKey: String? = nil,
-        anthropicApiKey: String? = nil
+        anthropicApiKey: String? = nil,
+        anthropicModel: AnthropicModel? = nil
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -76,6 +83,7 @@ struct EditorConfig: Codable {
         self.autocompleteMode = autocompleteMode
         self.openAIApiKey = openAIApiKey
         self.anthropicApiKey = anthropicApiKey
+        self.anthropicModel = anthropicModel
     }
 }
 
@@ -83,7 +91,6 @@ struct EditorConfig: Codable {
 enum AutocompleteMode: String, Codable, CaseIterable {
     case disabled = "disabled"
     case ruleBased = "rule_based"
-    case localML = "local_ml"
     case openAI = "openai"
     case anthropic = "anthropic"
     
@@ -91,9 +98,8 @@ enum AutocompleteMode: String, Codable, CaseIterable {
         switch self {
         case .disabled: return "Disabled"
         case .ruleBased: return "Rule-based (Fast, Offline)"
-        case .localML: return "Local ML (MLX, Offline)"
         case .openAI: return "OpenAI API (Online)"
-        case .anthropic: return "Anthropic API (Online)"
+        case .anthropic: return "Anthropic Claude (Online)"
         }
     }
     
@@ -103,12 +109,10 @@ enum AutocompleteMode: String, Codable, CaseIterable {
             return "No autocomplete suggestions"
         case .ruleBased:
             return "Fast, lightweight suggestions based on SQL grammar and your database schema. Works offline."
-        case .localML:
-            return "Uses Apple MLX framework with a small local model for smarter suggestions. Works offline but uses more resources."
         case .openAI:
             return "Uses OpenAI API for intelligent, context-aware suggestions. Requires API key and internet connection."
         case .anthropic:
-            return "Uses Anthropic Claude API for intelligent suggestions. Requires API key and internet connection."
+            return "Uses Anthropic Claude for intelligent, context-aware SQL suggestions. Requires API key and internet connection."
         }
     }
     
@@ -116,6 +120,26 @@ enum AutocompleteMode: String, Codable, CaseIterable {
         switch self {
         case .openAI, .anthropic: return true
         default: return false
+        }
+    }
+    
+    var usesAPI: Bool {
+        switch self {
+        case .openAI, .anthropic: return true
+        default: return false
+        }
+    }
+}
+
+/// Available Claude models for autocomplete
+enum AnthropicModel: String, Codable, CaseIterable {
+    case haiku = "claude-3-5-haiku-20241022"
+    case sonnet = "claude-sonnet-4-20250514"
+    
+    var displayName: String {
+        switch self {
+        case .haiku: return "Claude 3.5 Haiku (Fast)"
+        case .sonnet: return "Claude Sonnet 4 (Smarter)"
         }
     }
 }
