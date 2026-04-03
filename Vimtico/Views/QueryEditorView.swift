@@ -75,16 +75,8 @@ struct QueryEditorView: View {
                     theme: themeManager.currentTheme
                 )
                 
-                // Vim mode indicator
-                if viewModel.vimModeEnabled {
-                    VimModeIndicator(mode: vimEngine.mode, theme: themeManager.currentTheme)
-                }
-                
-                Toggle(isOn: $viewModel.vimModeEnabled) {
-                    Image(systemName: "character.cursor.ibeam")
-                }
-                .toggleStyle(.button)
-                .help("Toggle Vim Mode")
+                // Vim mode indicator (always shown)
+                VimModeIndicator(mode: vimEngine.mode, theme: themeManager.currentTheme)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
@@ -93,33 +85,34 @@ struct QueryEditorView: View {
             Divider()
             
             // Query editor with autocomplete overlay
-            ZStack(alignment: .topLeading) {
-                VimTextEditor(
-                    text: $viewModel.queryText,
-                    vimEngine: vimEngine,
-                    vimModeEnabled: $viewModel.vimModeEnabled,
-                    fontSize: $viewModel.fontSize,
-                    theme: themeManager.currentTheme,
-                    cursorPosition: $viewModel.cursorPosition,
-                    cursorRect: $cursorRect,
-                    showingAutocomplete: $viewModel.showAutocompleteSuggestions,
-                    cursorPositionAfterCompletion: $viewModel.cursorPositionAfterCompletion,
-                    onAutocompleteAccept: {
-                        viewModel.applySelectedSuggestion()
-                    },
-                    onAutocompleteUp: {
-                        viewModel.selectPreviousSuggestion()
-                    },
-                    onAutocompleteDown: {
-                        viewModel.selectNextSuggestion()
-                    },
-                    onAutocompleteDismiss: {
-                        viewModel.dismissAutocomplete()
-                    },
-                    onTab: {
-                        viewModel.requestAutocomplete(at: viewModel.cursorPosition)
-                    }
-                )
+            GeometryReader { editorGeo in
+                ZStack(alignment: .topLeading) {
+                    VimTextEditor(
+                        text: $viewModel.queryText,
+                        vimEngine: vimEngine,
+                        vimModeEnabled: $viewModel.vimModeEnabled,
+                        fontSize: $viewModel.fontSize,
+                        theme: themeManager.currentTheme,
+                        cursorPosition: $viewModel.cursorPosition,
+                        cursorRect: $cursorRect,
+                        showingAutocomplete: $viewModel.showAutocompleteSuggestions,
+                        cursorPositionAfterCompletion: $viewModel.cursorPositionAfterCompletion,
+                        onAutocompleteAccept: {
+                            viewModel.applySelectedSuggestion()
+                        },
+                        onAutocompleteUp: {
+                            viewModel.selectPreviousSuggestion()
+                        },
+                        onAutocompleteDown: {
+                            viewModel.selectNextSuggestion()
+                        },
+                        onAutocompleteDismiss: {
+                            viewModel.dismissAutocomplete()
+                        },
+                        onTab: {
+                            viewModel.requestAutocomplete(at: viewModel.cursorPosition)
+                        }
+                    )
                 .frame(minHeight: 100)
                 .onChange(of: viewModel.queryText) { _, newValue in
                     // Request autocomplete on text change using actual cursor position
@@ -130,6 +123,13 @@ struct QueryEditorView: View {
                 
                 // Autocomplete popup positioned at cursor
                 if viewModel.showAutocompleteSuggestions && !viewModel.autocompleteSuggestions.isEmpty {
+                    let popupMaxWidth: CGFloat = 600
+                    let popupMaxHeight: CGFloat = 300
+                    let cursorX = max(0, cursorRect.origin.x)
+                    let cursorY = cursorRect.origin.y + cursorRect.height + 2
+                    // Clamp X so popup doesn't overflow the editor's right edge
+                    let clampedX = min(cursorX, max(0, editorGeo.size.width - popupMaxWidth))
+                    
                     AutocompletePopupView(
                         suggestions: viewModel.autocompleteSuggestions,
                         selectedIndex: viewModel.selectedSuggestionIndex,
@@ -141,12 +141,14 @@ struct QueryEditorView: View {
                             viewModel.dismissAutocomplete()
                         }
                     )
-                    .frame(maxWidth: 400, maxHeight: 200)
+                    .frame(maxWidth: popupMaxWidth, maxHeight: popupMaxHeight)
+                    .fixedSize(horizontal: true, vertical: true)
                     .offset(
-                        x: max(0, cursorRect.origin.x),
-                        y: cursorRect.origin.y + cursorRect.height + 2
+                        x: clampedX,
+                        y: cursorY
                     )
                     .zIndex(100)
+                }
                 }
             }
             
@@ -201,7 +203,7 @@ struct QueryEditorView: View {
             }
             
             // Status bar
-            if viewModel.vimModeEnabled && !vimEngine.commandBuffer.isEmpty {
+            if !vimEngine.commandBuffer.isEmpty {
                 HStack {
                     Text(":\(vimEngine.commandBuffer)")
                         .font(.system(.body, design: .monospaced))
@@ -238,9 +240,6 @@ struct QueryEditorView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .executeQuery)) { _ in
             viewModel.executeQuery()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleVimMode)) { _ in
-            viewModel.vimModeEnabled.toggle()
         }
         .onReceive(NotificationCenter.default.publisher(for: .zoomIn)) { _ in
             if viewModel.fontSize < CGFloat(EditorConfig.maxFontSize) {
@@ -450,10 +449,10 @@ struct AutocompleteRowView: View {
             Text(suggestion.displayText)
                 .font(.system(.body, design: .monospaced))
                 .foregroundColor(theme.foregroundColor)
-            
-            Spacer()
+                .lineLimit(1)
             
             if let detail = suggestion.detail {
+                Spacer()
                 Text(detail)
                     .font(.caption)
                     .foregroundColor(theme.foregroundColor.opacity(0.5))

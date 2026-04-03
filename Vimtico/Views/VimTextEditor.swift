@@ -22,6 +22,8 @@ struct VimTextEditor: NSViewRepresentable {
     var onAutocompleteDismiss: (() -> Void)?
     var onTab: (() -> Void)?
     
+    private static let gutterWidth: CGFloat = 52
+    
     init(text: Binding<String>,
          vimEngine: VimEngine,
          vimModeEnabled: Binding<Bool>,
@@ -52,12 +54,23 @@ struct VimTextEditor: NSViewRepresentable {
         self.onTab = onTab
     }
     
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> EditorContainerView {
+        // Container view holds gutter + scroll view side by side
+        let container = EditorContainerView()
+        container.autoresizesSubviews = true
+        
+        // --- Scroll View (right side) ---
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.autoresizingMask = [.width, .height]
+        // Frame will be set in layout, start with placeholder
+        scrollView.frame = NSRect(x: Self.gutterWidth, y: 0,
+                                  width: max(container.bounds.width - Self.gutterWidth, 200),
+                                  height: max(container.bounds.height, 200))
         
+        // --- Text View ---
         let textView = VimEnabledTextView()
         textView.delegate = context.coordinator
         textView.isRichText = false
@@ -89,29 +102,57 @@ struct VimTextEditor: NSViewRepresentable {
             onTab: onTab
         )
         
-        // Set up line number ruler
-        let lineNumberGutter = LineNumberRulerView(textView: textView, theme: theme)
-        lineNumberGutter.clientView = textView
-        scrollView.verticalRulerView = lineNumberGutter
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
-        
-        // Inset for text (leave space from the ruler, not extra left padding)
+        // Original working inset, no gutter offset needed
         textView.textContainerInset = NSSize(width: 4, height: 8)
-        textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         
         scrollView.documentView = textView
         
-        // Store the ruler reference on the text view for updates
-        textView.lineNumberRuler = lineNumberGutter
+        // Set initial frame so text container has non-zero width for layout
+        let initialWidth: CGFloat = max(scrollView.contentSize.width, 400)
+        textView.frame = NSRect(x: 0, y: 0, width: initialWidth, height: max(scrollView.contentSize.height, 200))
+        textView.textContainer?.containerSize = NSSize(width: max(initialWidth - 8, 100), height: CGFloat.greatestFiniteMagnitude)
+        
+        // --- Gutter View (left side) ---
+        let gutter = LineNumberGutterView()
+        gutter.textView = textView
+        gutter.theme = theme
+        gutter.frame = NSRect(x: 0, y: 0, width: Self.gutterWidth, height: max(container.bounds.height, 200))
+        gutter.autoresizingMask = [.height]
+        
+        container.addSubview(gutter)
+        container.addSubview(scrollView)
+        
+        // Store references in the container for easy lookup
+        container.scrollView = scrollView
+        container.gutterView = gutter
+        
+        // Observe scroll changes to refresh line numbers
+        NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { _ in
+            gutter.needsDisplay = true
+        }
         
         applyTheme(to: textView)
         
-        return scrollView
+        return container
     }
     
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? VimEnabledTextView else { return }
+    func updateNSView(_ container: EditorContainerView, context: Context) {
+        guard let scrollView = container.scrollView,
+              let textView = scrollView.documentView as? VimEnabledTextView else { return }
+        let gutter = container.gutterView
+        
+        // Update gutter and scroll view frames to match container size
+        let containerBounds = container.bounds
+        if containerBounds.width > 0 {
+            gutter?.frame = NSRect(x: 0, y: 0, width: Self.gutterWidth, height: containerBounds.height)
+            scrollView.frame = NSRect(x: Self.gutterWidth, y: 0,
+                                      width: containerBounds.width - Self.gutterWidth,
+                                      height: containerBounds.height)
+        }
         
         if textView.string != text {
             let prevRange = textView.selectedRange()
@@ -150,11 +191,9 @@ struct VimTextEditor: NSViewRepresentable {
         applyTheme(to: textView)
         applySyntaxHighlighting(to: textView)
         
-        // Update ruler theme
-        if let ruler = scrollView.verticalRulerView as? LineNumberRulerView {
-            ruler.theme = theme
-            ruler.needsDisplay = true
-        }
+        // Update gutter theme for line numbers
+        gutter?.theme = theme
+        gutter?.needsDisplay = true
     }
     
     func makeCoordinator() -> Coordinator {
@@ -262,7 +301,9 @@ struct VimTextEditor: NSViewRepresentable {
             // Ensure scroll follows cursor after typing
             textView.scrollRangeToVisible(textView.selectedRange())
             // Refresh line numbers
-            textView.lineNumberRuler?.needsDisplay = true
+            if let container = textView.enclosingScrollView?.superview as? EditorContainerView {
+                container.gutterView?.needsDisplay = true
+            }
         }
         
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -271,7 +312,9 @@ struct VimTextEditor: NSViewRepresentable {
             // Scroll to keep cursor visible
             textView.scrollRangeToVisible(textView.selectedRange())
             // Refresh line numbers on selection change
-            textView.lineNumberRuler?.needsDisplay = true
+            if let container = textView.enclosingScrollView?.superview as? EditorContainerView {
+                container.gutterView?.needsDisplay = true
+            }
         }
         
         private func updateCursorInfo(_ textView: VimEnabledTextView) {
@@ -279,7 +322,7 @@ struct VimTextEditor: NSViewRepresentable {
             parent.cursorPosition = pos
             
             // Compute cursor rect in the text view's coordinate space,
-            // then convert to the scroll view (our NSView) coordinate space.
+            // then convert to the container view coordinate space.
             guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
             let nsString = textView.string as NSString
             
@@ -306,117 +349,116 @@ struct VimTextEditor: NSViewRepresentable {
             rect.origin.x += textView.textContainerOrigin.x
             rect.origin.y += textView.textContainerOrigin.y
             
-            // Convert from text view coords to scroll view (the NSView we return)
+            // Convert to position relative to the visible editor area.
+            // Both textView and clipView are flipped (y=0 at top), so we can
+            // compute directly: subtract scroll offset, then add gutter width for X.
             if let scrollView = textView.enclosingScrollView {
-                let converted = textView.convert(rect, to: scrollView)
-                // Flip y: NSView uses bottom-left origin, SwiftUI uses top-left.
-                // The scroll view's clip view's documentVisibleRect gives us the visible area.
-                let visibleRect = scrollView.contentView.bounds
-                let flippedY = converted.origin.y - visibleRect.origin.y
-                parent.cursorRect = CGRect(x: converted.origin.x, y: flippedY, width: rect.width, height: rect.height)
+                let scrollOffset = scrollView.contentView.bounds.origin
+                let gutterWidth = scrollView.frame.origin.x
+                let visibleX = rect.origin.x - scrollOffset.x + gutterWidth
+                let visibleY = rect.origin.y - scrollOffset.y
+                parent.cursorRect = CGRect(x: visibleX, y: visibleY, width: rect.width, height: rect.height)
             }
         }
     }
 }
 
-// MARK: - Line Number Ruler View
+// MARK: - Editor Container View (holds gutter + scroll view side by side)
 
-class LineNumberRulerView: NSRulerView {
-    var theme: Theme
-    private weak var textView: NSTextView?
+class EditorContainerView: NSView {
+    var scrollView: NSScrollView?
+    var gutterView: LineNumberGutterView?
     
-    init(textView: NSTextView, theme: Theme) {
-        self.textView = textView
-        self.theme = theme
-        super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
-        self.ruleThickness = 40
-        self.clientView = textView
-        
-        // Observe text changes to refresh line numbers
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(textDidChange(_:)),
-            name: NSText.didChangeNotification, object: textView
-        )
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(boundsDidChange(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: textView.enclosingScrollView?.contentView
-        )
-    }
+    override var isFlipped: Bool { true }
+}
+
+// MARK: - Line Number Gutter View (sibling of scroll view in container)
+
+class LineNumberGutterView: NSView {
+    weak var textView: VimEnabledTextView?
+    var theme: Theme?
     
-    required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
+    override var isFlipped: Bool { true }
     
-    @objc private func textDidChange(_ notification: Notification) {
-        needsDisplay = true
-    }
-    
-    @objc private func boundsDidChange(_ notification: Notification) {
-        needsDisplay = true
-    }
-    
-    override func drawHashMarksAndLabels(in rect: NSRect) {
-        guard let textView = self.textView,
+    override func draw(_ dirtyRect: NSRect) {
+        guard let textView = textView,
+              let theme = theme,
               let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
         
-        let bgColor = NSColor(theme.editorBackgroundColor)
-        bgColor.setFill()
-        rect.fill()
+        let gutterWidth = bounds.width
+        let textString = textView.string as NSString
         
-        // Draw a subtle right border
+        // Fill gutter background
+        NSColor(theme.editorBackgroundColor).setFill()
+        dirtyRect.fill()
+        
+        // Subtle right border
         let borderColor = NSColor(theme.foregroundColor).withAlphaComponent(0.1)
         borderColor.setStroke()
         let borderPath = NSBezierPath()
-        borderPath.move(to: NSPoint(x: rect.maxX - 0.5, y: rect.minY))
-        borderPath.line(to: NSPoint(x: rect.maxX - 0.5, y: rect.maxY))
+        borderPath.move(to: NSPoint(x: gutterWidth - 0.5, y: dirtyRect.minY))
+        borderPath.line(to: NSPoint(x: gutterWidth - 0.5, y: dirtyRect.maxY))
         borderPath.lineWidth = 1
         borderPath.stroke()
         
-        let textString = textView.string as NSString
+        let numberFont = NSFont.monospacedSystemFont(ofSize: textView.font?.pointSize ?? 14, weight: .regular)
+        
+        // The scroll offset: how far the text view has been scrolled
+        let clipBounds = textView.enclosingScrollView?.contentView.bounds ?? .zero
+        let scrollY = clipBounds.origin.y
+        
+        // For empty text, draw line 1
+        if textString.length == 0 {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: numberFont,
+                .foregroundColor: NSColor(theme.foregroundColor).withAlphaComponent(0.9)
+            ]
+            let lineStr = "1" as NSString
+            let strSize = lineStr.size(withAttributes: attrs)
+            let xPos = gutterWidth - strSize.width - 8
+            // textContainerOrigin.y offset minus scroll position
+            let yPos = textView.textContainerOrigin.y - scrollY
+            lineStr.draw(at: NSPoint(x: xPos, y: yPos), withAttributes: attrs)
+            return
+        }
+        
+        // Determine visible range in the text view
         let visibleRect = textView.visibleRect
+        guard visibleRect.height > 0 else { return }
         let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
         let visibleCharRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
         
-        let font = NSFont.monospacedSystemFont(ofSize: max((textView.font?.pointSize ?? 14) - 6, 9), weight: .regular)
-        
-        // Determine which line the cursor is on for highlighting
+        // Determine cursor line for highlighting
         let cursorPos = textView.selectedRange().location
         var cursorLine = 1
         var idx = 0
         while idx < cursorPos && idx < textString.length {
-            if textString.character(at: idx) == 10 { // newline
-                cursorLine += 1
-            }
+            if textString.character(at: idx) == 10 { cursorLine += 1 }
             idx += 1
         }
         
-        // Count lines up to the visible range start
+        // Count lines up to visible range start
         var lineNumber = 1
         var scanIdx = 0
         while scanIdx < visibleCharRange.location && scanIdx < textString.length {
-            if textString.character(at: scanIdx) == 10 {
-                lineNumber += 1
-            }
+            if textString.character(at: scanIdx) == 10 { lineNumber += 1 }
             scanIdx += 1
         }
         
-        // Iterate over visible lines
+        // Draw line numbers for visible lines
         var charIndex = visibleCharRange.location
         while charIndex < NSMaxRange(visibleCharRange) {
             let lineRange = textString.lineRange(for: NSRange(location: charIndex, length: 0))
             let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
-            var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-            lineRect.origin.y += textView.textContainerOrigin.y
-            
-            // Convert to ruler coordinates
-            let yPos = lineRect.origin.y - visibleRect.origin.y
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            // lineRect is in text container coords. Add textContainerOrigin.y, then subtract scroll offset
+            // to get position in the gutter view's coordinate space.
+            let yPos = lineRect.origin.y + textView.textContainerOrigin.y - scrollY
             
             let isCursorLine = lineNumber == cursorLine
-            
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: font,
+                .font: numberFont,
                 .foregroundColor: isCursorLine
                     ? NSColor(theme.foregroundColor).withAlphaComponent(0.9)
                     : NSColor(theme.foregroundColor).withAlphaComponent(0.35)
@@ -424,8 +466,7 @@ class LineNumberRulerView: NSRulerView {
             
             let lineStr = "\(lineNumber)" as NSString
             let strSize = lineStr.size(withAttributes: attrs)
-            // Right-align within the ruler
-            let xPos = ruleThickness - strSize.width - 8
+            let xPos = gutterWidth - strSize.width - 8
             lineStr.draw(at: NSPoint(x: xPos, y: yPos), withAttributes: attrs)
             
             lineNumber += 1
@@ -440,7 +481,6 @@ class VimEnabledTextView: NSTextView {
     var vimEngine: VimEngine?
     var vimModeEnabledBinding: Binding<Bool>?
     var isShowingAutocomplete: Bool = false
-    weak var lineNumberRuler: LineNumberRulerView?
     
     struct AutocompleteCallbacks {
         var onAccept: (() -> Void)?

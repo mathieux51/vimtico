@@ -374,7 +374,7 @@ class SQLAutocompleteService: ObservableObject {
             guard let text = suggestion["text"] else { return nil }
             return SQLCompletion(
                 text: text,
-                displayText: String(text.prefix(50)) + (text.count > 50 ? "..." : ""),
+                displayText: text,
                 type: .snippet,
                 detail: suggestion["description"]
             )

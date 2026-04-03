@@ -946,7 +946,7 @@ class SmartAutocompleteEngine {
                         let groupSql = "select \(col.name), count(*) from \(tableName) group by \(col.name) order by count(*) desc"
                         completions.append(SQLCompletion(
                             text: groupSql,
-                            displayText: String(groupSql.prefix(60)) + "...",
+                            displayText: groupSql,
                             type: .snippet,
                             detail: "Count by \(col.name)"
                         ))
@@ -991,7 +991,7 @@ class SmartAutocompleteEngine {
                 
                 completions.append(SQLCompletion(
                     text: sql,
-                    displayText: String(sql.prefix(60)) + (sql.count > 60 ? "..." : ""),
+                    displayText: sql,
                     type: .snippet,
                     detail: "Query \(tableName)"
                 ))
@@ -1011,7 +1011,7 @@ class SmartAutocompleteEngine {
                 }
                 completions.append(SQLCompletion(
                     text: sql,
-                    displayText: String(sql.prefix(60)) + (sql.count > 60 ? "..." : ""),
+                    displayText: sql,
                     type: .snippet,
                     detail: tableName
                 ))
@@ -1027,7 +1027,7 @@ class SmartAutocompleteEngine {
             if matchCount >= 2 || (words.count == 1 && matchCount == 1) {
                 completions.append(SQLCompletion(
                     text: entry.sql.trimmingCharacters(in: .whitespacesAndNewlines),
-                    displayText: String(entry.sql.prefix(60)) + (entry.sql.count > 60 ? "..." : ""),
+                    displayText: entry.sql.trimmingCharacters(in: .whitespacesAndNewlines),
                     type: .snippet,
                     detail: "from history"
                 ))
@@ -1143,7 +1143,7 @@ class SmartAutocompleteEngine {
                 .map { val in
                     SQLCompletion(
                         text: quoteValueIfNeeded(val, column: column, table: resolvedTable),
-                        displayText: String(val.prefix(60)),
+                        displayText: val,
                         type: .symbol,
                         detail: "from \(resolvedTable)"
                     )
@@ -1162,7 +1162,7 @@ class SmartAutocompleteEngine {
             .map { val in
                 SQLCompletion(
                     text: quoteValueIfNeeded(val, column: column, table: resolvedTable),
-                    displayText: String(val.prefix(60)),
+                    displayText: val,
                     type: .symbol,
                     detail: "from \(resolvedTable)"
                 )

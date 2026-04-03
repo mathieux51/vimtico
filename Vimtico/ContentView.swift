@@ -6,7 +6,7 @@ struct ContentView: View {
     @EnvironmentObject var configManager: ConfigurationManager
     @State private var showingConnectionSheet = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var editorHeight: CGFloat = 250
+    @State private var editorHeight: CGFloat? = nil
     @State private var showingKeybindings = false
     
     var body: some View {
@@ -25,13 +25,16 @@ struct ContentView: View {
             GeometryReader { geo in
                 VStack(spacing: 0) {
                     QueryEditorView(viewModel: viewModel)
-                        .frame(height: editorHeight)
+                        .frame(height: editorHeight ?? geo.size.height / 2)
                         .overlay(
                             focusBorder(for: .editor),
                             alignment: .bottom
                         )
                     
-                    ResizableDivider(totalHeight: geo.size.height, topHeight: $editorHeight)
+                    ResizableDivider(totalHeight: geo.size.height, topHeight: Binding(
+                        get: { editorHeight ?? geo.size.height / 2 },
+                        set: { editorHeight = $0 }
+                    ))
                     
                     ResultsTableView(viewModel: viewModel)
                         .frame(minHeight: 100)
@@ -65,11 +68,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .reconnect)) { _ in
             viewModel.reconnect()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .vimModeChanged)) { notification in
-            if let enabled = notification.object as? Bool {
-                viewModel.vimModeEnabled = enabled
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .focusPane)) { notification in
             if let pane = notification.object as? FocusPane {
                 viewModel.focusedPane = pane
@@ -90,12 +88,14 @@ struct ContentView: View {
                 viewModel.fontSize = CGFloat(size)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .autocompleteConfigChanged)) { _ in
+            syncAutocompleteConfig()
+        }
         .onAppear {
-            if configManager.configuration.vimMode?.enabled ?? true {
-                viewModel.vimModeEnabled = true
-            }
             // Apply saved font size from config
             viewModel.fontSize = CGFloat(configManager.configuration.editor?.effectiveFontSize ?? EditorConfig.defaultFontSize)
+            // Sync autocomplete config from saved settings
+            syncAutocompleteConfig()
             // Auto-connect to last used database
             viewModel.autoConnectIfPossible()
             viewModel.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -414,6 +414,16 @@ struct ContentView: View {
     }
     
     // MARK: - Focus Management
+    
+    private func syncAutocompleteConfig() {
+        let editor = configManager.configuration.editor
+        viewModel.configureAutocomplete(
+            mode: editor?.autocompleteMode ?? .ruleBased,
+            openAIKey: editor?.openAIApiKey,
+            anthropicKey: editor?.anthropicApiKey,
+            anthropicModel: editor?.anthropicModel?.rawValue
+        )
+    }
     
     private static func resignEditorFocus() {
         DispatchQueue.main.async {

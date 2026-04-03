@@ -28,7 +28,7 @@ class DatabaseViewModel: ObservableObject {
     @Published var isConnected: Bool = false
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
-    @Published var vimModeEnabled: Bool = false
+    @Published var vimModeEnabled: Bool = true
     @Published var queryHistory: [QueryHistoryItem] = []
     
     // Shared font size (zoom applies to all panes, default from settings)
@@ -201,16 +201,41 @@ class DatabaseViewModel: ObservableObject {
     }
     
     func applyAutocompletion(_ completion: SQLCompletion) {
-        // Find the current word to replace based on actual cursor position
         let pos = min(cursorPosition, queryText.count)
+        
+        // Check if cursor is on a comment line (-- ...)
+        // If so, insert the completion on the next line instead of replacing inline
+        if isOnCommentLine(position: pos) {
+            let lineEnd = findEndOfLine(position: pos)
+            let insertIdx = queryText.index(queryText.startIndex, offsetBy: lineEnd)
+            let textToInsert = "\n" + completion.text
+            queryText.insert(contentsOf: textToInsert, at: insertIdx)
+            cursorPositionAfterCompletion = lineEnd + textToInsert.count
+            showAutocompleteSuggestions = false
+            return
+        }
+        
+        // Find the current word to replace based on actual cursor position
         let currentWord = getCurrentWordAtCursor(position: pos)
         if !currentWord.isEmpty {
-            // Find the word boundary before cursor
+            let completionLower = completion.text.lowercased()
+            let wordLower = currentWord.lowercased()
             let wordStart = pos - currentWord.count
-            let startIdx = queryText.index(queryText.startIndex, offsetBy: wordStart)
-            let endIdx = queryText.index(queryText.startIndex, offsetBy: pos)
-            queryText.replaceSubrange(startIdx..<endIdx, with: completion.text)
-            cursorPositionAfterCompletion = wordStart + completion.text.count
+            
+            if completionLower.hasPrefix(wordLower) {
+                // Completion includes the current word (e.g. word="selec", completion="select * from items")
+                // Replace the partial word with the full completion
+                let startIdx = queryText.index(queryText.startIndex, offsetBy: wordStart)
+                let endIdx = queryText.index(queryText.startIndex, offsetBy: pos)
+                queryText.replaceSubrange(startIdx..<endIdx, with: completion.text)
+                cursorPositionAfterCompletion = wordStart + completion.text.count
+            } else {
+                // Completion is a suffix/continuation (e.g. word="selec", completion="t * from items")
+                // Insert at cursor without removing the current word
+                let insertIdx = queryText.index(queryText.startIndex, offsetBy: pos)
+                queryText.insert(contentsOf: completion.text, at: insertIdx)
+                cursorPositionAfterCompletion = pos + completion.text.count
+            }
         } else {
             // Insert at cursor position
             let insertIdx = queryText.index(queryText.startIndex, offsetBy: pos)
@@ -218,6 +243,28 @@ class DatabaseViewModel: ObservableObject {
             cursorPositionAfterCompletion = pos + completion.text.count
         }
         showAutocompleteSuggestions = false
+    }
+    
+    /// Returns true if the cursor is on a line that starts with `--`
+    private func isOnCommentLine(position: Int) -> Bool {
+        let pos = min(position, queryText.count)
+        let textBefore = String(queryText.prefix(pos))
+        let lines = textBefore.components(separatedBy: "\n")
+        guard let currentLine = lines.last else { return false }
+        return currentLine.trimmingCharacters(in: .whitespaces).hasPrefix("--")
+    }
+    
+    /// Finds the end-of-line offset for the line containing the given position
+    private func findEndOfLine(position: Int) -> Int {
+        let pos = min(position, queryText.count)
+        var idx = queryText.index(queryText.startIndex, offsetBy: pos)
+        while idx < queryText.endIndex {
+            if queryText[idx] == "\n" {
+                break
+            }
+            idx = queryText.index(after: idx)
+        }
+        return queryText.distance(from: queryText.startIndex, to: idx)
     }
     
     private func getCurrentWordAtCursor(position: Int) -> String {

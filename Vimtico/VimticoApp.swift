@@ -76,12 +76,6 @@ struct VimticoApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command])
             }
-            CommandMenu("Vim") {
-                Button("Toggle Vim Mode") {
-                    NotificationCenter.default.post(name: .toggleVimMode, object: nil)
-                }
-                .keyboardShortcut("v", modifiers: [.command, .shift])
-            }
             CommandGroup(replacing: .help) {
                 Button("Keybindings") {
                     NotificationCenter.default.post(name: .showKeybindings, object: nil)
@@ -112,11 +106,6 @@ struct SettingsView: View {
             EditorSettingsView()
                 .tabItem {
                     Label("Editor", systemImage: "text.cursor")
-                }
-            
-            VimSettingsView()
-                .tabItem {
-                    Label("Vim", systemImage: "keyboard")
                 }
             
             AutocompleteSettingsView()
@@ -329,7 +318,6 @@ struct GeneralSettingsView: View {
                 configManager.configuration = AppConfiguration()
                 configManager.saveConfiguration()
                 NotificationCenter.default.post(name: .fontSizeChanged, object: EditorConfig.defaultFontSize)
-                NotificationCenter.default.post(name: .vimModeChanged, object: true)
             }
         } message: {
             Text("This will reset all configuration to defaults. This cannot be undone.")
@@ -454,68 +442,6 @@ struct EditorSettingsView: View {
     }
 }
 
-// MARK: - Vim Settings
-
-struct VimSettingsView: View {
-    @EnvironmentObject var configManager: ConfigurationManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            SettingsSection("Vim Mode") {
-                SettingRow("") {
-                    Toggle("Enable Vim mode", isOn: Binding(
-                        get: { configManager.configuration.vimMode?.enabled ?? true },
-                        set: { newValue in
-                            ensureVimConfig()
-                            configManager.configuration.vimMode?.enabled = newValue
-                            configManager.saveConfiguration()
-                            NotificationCenter.default.post(name: .vimModeChanged, object: newValue)
-                        }
-                    ))
-                    .toggleStyle(.checkbox)
-                }
-                SettingHint(text: "Toggle at runtime with Cmd+Shift+V. Pane navigation (Ctrl-w) works regardless.")
-            }
-            
-            SettingsSection("Cursor") {
-                SettingRow("") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Cursor blink", isOn: Binding(
-                            get: { configManager.configuration.vimMode?.cursorBlink ?? true },
-                            set: { newValue in
-                                ensureVimConfig()
-                                configManager.configuration.vimMode?.cursorBlink = newValue
-                                configManager.saveConfiguration()
-                            }
-                        ))
-                        .toggleStyle(.checkbox)
-                        
-                        Toggle("Relative line numbers", isOn: Binding(
-                            get: { configManager.configuration.vimMode?.relativeLineNumbers ?? false },
-                            set: { newValue in
-                                ensureVimConfig()
-                                configManager.configuration.vimMode?.relativeLineNumbers = newValue
-                                configManager.saveConfiguration()
-                            }
-                        ))
-                        .toggleStyle(.checkbox)
-                    }
-                }
-                SettingHint(text: "Normal mode uses a block cursor. Insert mode uses a line cursor.")
-            }
-            
-            Spacer()
-        }
-        .padding(20)
-    }
-    
-    private func ensureVimConfig() {
-        if configManager.configuration.vimMode == nil {
-            configManager.configuration.vimMode = VimModeConfig()
-        }
-    }
-}
-
 // MARK: - Autocomplete Settings
 
 struct AutocompleteSettingsView: View {
@@ -546,6 +472,7 @@ struct AutocompleteSettingsView: View {
                             ensureEditorConfig()
                             configManager.configuration.editor?.autocompleteMode = newValue
                             configManager.saveConfiguration()
+                            notifyAutocompleteConfigChanged()
                         }
                     )) {
                         ForEach(AutocompleteMode.allCases, id: \.self) { mode in
@@ -567,6 +494,7 @@ struct AutocompleteSettingsView: View {
                                 ensureEditorConfig()
                                 configManager.configuration.editor?.openAIApiKey = newValue
                                 configManager.saveConfiguration()
+                                notifyAutocompleteConfigChanged()
                             }
                         ))
                         .textFieldStyle(.roundedBorder)
@@ -585,6 +513,7 @@ struct AutocompleteSettingsView: View {
                                     ensureEditorConfig()
                                     configManager.configuration.editor?.anthropicApiKey = newValue
                                     configManager.saveConfiguration()
+                                    notifyAutocompleteConfigChanged()
                                 }
                             ))
                             .textFieldStyle(.roundedBorder)
@@ -617,6 +546,7 @@ struct AutocompleteSettingsView: View {
                                         // Find matching enum case or store as-is
                                         configManager.configuration.editor?.anthropicModel = AnthropicModel(rawValue: newValue)
                                         configManager.saveConfiguration()
+                                        notifyAutocompleteConfigChanged()
                                     }
                                 )) {
                                     ForEach(AnthropicModel.allCases, id: \.self) { model in
@@ -633,6 +563,7 @@ struct AutocompleteSettingsView: View {
                                     ensureEditorConfig()
                                     configManager.configuration.editor?.anthropicModel = AnthropicModel(rawValue: newValue)
                                     configManager.saveConfiguration()
+                                    notifyAutocompleteConfigChanged()
                                 }
                             )) {
                                 ForEach(availableModels) { model in
@@ -663,6 +594,10 @@ struct AutocompleteSettingsView: View {
         if configManager.configuration.editor == nil {
             configManager.configuration.editor = EditorConfig()
         }
+    }
+    
+    private func notifyAutocompleteConfigChanged() {
+        NotificationCenter.default.post(name: .autocompleteConfigChanged, object: nil)
     }
     
     private func fetchModels() {
@@ -724,7 +659,6 @@ extension Notification.Name {
     static let executeQuery = Notification.Name("executeQuery")
     static let executeSelectedQuery = Notification.Name("executeSelectedQuery")
     static let cancelQuery = Notification.Name("cancelQuery")
-    static let toggleVimMode = Notification.Name("toggleVimMode")
     static let zoomIn = Notification.Name("zoomIn")
     static let zoomOut = Notification.Name("zoomOut")
     static let zoomReset = Notification.Name("zoomReset")
@@ -732,7 +666,7 @@ extension Notification.Name {
     static let showKeybindings = Notification.Name("showKeybindings")
     static let reconnect = Notification.Name("reconnect")
     static let fontSizeChanged = Notification.Name("fontSizeChanged")
-    static let vimModeChanged = Notification.Name("vimModeChanged")
     static let editorBecameFirstResponder = Notification.Name("editorBecameFirstResponder")
     static let goToLine = Notification.Name("goToLine")
+    static let autocompleteConfigChanged = Notification.Name("autocompleteConfigChanged")
 }
