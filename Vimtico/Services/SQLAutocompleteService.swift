@@ -97,7 +97,7 @@ class SQLAutocompleteService: ObservableObject {
     private func getOpenAICompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         guard let apiKey = openAIApiKey, !apiKey.isEmpty else {
             await MainActor.run { lastAPIError = "No OpenAI API key configured" }
-            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            return await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
         }
         
         await MainActor.run { isLoading = true; lastAPIError = nil }
@@ -151,11 +151,11 @@ class SQLAutocompleteService: ObservableObject {
         
         do {
             let apiCompletions = try await callOpenAI(prompt: prompt, systemPrompt: systemPrompt, apiKey: apiKey)
-            let smartResults = smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            let smartResults = await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
             return mergeCompletions(primary: apiCompletions, secondary: smartResults)
         } catch {
             await MainActor.run { lastAPIError = error.localizedDescription }
-            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            return await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
         }
     }
     
@@ -257,7 +257,7 @@ class SQLAutocompleteService: ObservableObject {
     private func getAnthropicCompletions(text: String, cursorPosition: Int) async -> [SQLCompletion] {
         guard let apiKey = anthropicApiKey, !apiKey.isEmpty else {
             await MainActor.run { lastAPIError = "No Anthropic API key configured" }
-            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            return await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
         }
         
         await MainActor.run { isLoading = true; lastAPIError = nil }
@@ -311,11 +311,11 @@ class SQLAutocompleteService: ObservableObject {
         
         do {
             let apiCompletions = try await callAnthropic(prompt: prompt, systemPrompt: systemPrompt, apiKey: apiKey)
-            let smartResults = smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            let smartResults = await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
             return mergeCompletions(primary: apiCompletions, secondary: smartResults)
         } catch {
             await MainActor.run { lastAPIError = error.localizedDescription }
-            return smartEngine.getCompletions(text: text, cursorPosition: cursorPosition)
+            return await smartEngine.getCompletionsWithValues(text: text, cursorPosition: cursorPosition)
         }
     }
     

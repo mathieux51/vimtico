@@ -403,9 +403,20 @@ actor PostgreSQLService {
     }
     
     /// Fetch distinct values for a column in a table (used for autocomplete value suggestions)
-    func fetchDistinctValues(table: String, column: String, limit: Int = 50) async -> [String] {
+    /// When filter is non-empty, applies server-side ILIKE filtering for high-cardinality columns.
+    func fetchDistinctValues(table: String, column: String, filter: String = "", limit: Int = 50) async -> [String] {
         do {
-            let sql = "select distinct \"\(column)\" from \"\(table)\" where \"\(column)\" is not null order by \"\(column)\" limit \(limit)"
+            var sql = "select distinct \"\(column)\" from \"\(table)\" where \"\(column)\" is not null"
+            if !filter.isEmpty {
+                // Escape % and _ in filter to prevent LIKE pattern injection
+                let escaped = filter
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "%", with: "\\%")
+                    .replacingOccurrences(of: "_", with: "\\_")
+                    .replacingOccurrences(of: "'", with: "''")
+                sql += " and \"\(column)\"::text ilike '\(escaped)%'"
+            }
+            sql += " order by \"\(column)\" limit \(limit)"
             let response = try await executeQuery(sql)
             return response.rows.compactMap { $0.first }
         } catch {

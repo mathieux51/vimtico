@@ -49,6 +49,7 @@ struct CursorContext {
     let precedingColumnName: String? // column name before the operator (for value lookups)
     let precedingTableForColumn: String? // resolved table for precedingColumnName
     let commentText: String?         // if cursor is on a -- comment line, the text after --
+    let isInsideQuote: Bool          // cursor is inside an open single-quote string literal
 }
 
 /// Structural SQL context (where in the query the cursor sits)
@@ -113,8 +114,9 @@ class SmartAutocompleteEngine {
     private let maxHistory = 200
     
     /// Callback to fetch distinct values from the database. Set by the view model.
-    /// Parameters: tableName, columnName, limit. Returns distinct values as strings.
-    var fetchValues: ((String, String, Int) async -> [String])?
+    /// Parameters: tableName, columnName, filter (prefix for server-side ILIKE), limit.
+    /// Returns distinct values as strings.
+    var fetchValues: ((String, String, String, Int) async -> [String])?
     
     // MARK: - Schema Updates
     
@@ -200,6 +202,7 @@ class SmartAutocompleteEngine {
                 column: colName,
                 table: ctx.precedingTableForColumn,
                 filter: ctx.currentWord,
+                isInsideQuote: ctx.isInsideQuote,
                 context: ctx
             )
         }
@@ -1117,6 +1120,7 @@ class SmartAutocompleteEngine {
     // MARK: - Layer 2: Value Lookups
     
     private func getValueCompletions(column: String, table: String?, filter: String,
+                                     isInsideQuote: Bool,
                                      context: CursorContext) async -> [SQLCompletion] {
         // Resolve which table the column belongs to
         let tableName: String?
@@ -1135,45 +1139,69 @@ class SmartAutocompleteEngine {
         
         let cacheKey = "\(resolvedTable).\(column)"
         
-        // Check cache
+        // Check cache first: try client-side filtering of cached unfiltered values
         if let cached = valueCache[cacheKey], !cached.isExpired {
-            return cached.values
+            let clientFiltered = cached.values
                 .filter { filter.isEmpty || $0.lowercased().hasPrefix(filter.lowercased()) }
-                .prefix(20)
-                .map { val in
+            
+            // If cache has matches, use them
+            if !clientFiltered.isEmpty || filter.isEmpty {
+                return clientFiltered.prefix(20).map { val in
                     SQLCompletion(
-                        text: quoteValueIfNeeded(val, column: column, table: resolvedTable),
+                        text: quoteValueIfNeeded(val, column: column, table: resolvedTable, skipQuotes: isInsideQuote),
                         displayText: val,
                         type: .symbol,
                         detail: "from \(resolvedTable)"
                     )
                 }
+            }
+            
+            // Cache has no matches for this filter. Fall through to server-side filtered fetch.
         }
         
         // Fetch from database
         guard let fetch = fetchValues else { return [] }
         
-        let values = await fetch(resolvedTable, column, maxCachedValues)
-        valueCache[cacheKey] = ValueCacheEntry(values: values, fetchedAt: Date())
-        
-        return values
-            .filter { filter.isEmpty || $0.lowercased().hasPrefix(filter.lowercased()) }
-            .prefix(20)
-            .map { val in
+        if filter.isEmpty {
+            // No filter: fetch unfiltered top-N and cache
+            let values = await fetch(resolvedTable, column, "", maxCachedValues)
+            valueCache[cacheKey] = ValueCacheEntry(values: values, fetchedAt: Date())
+            
+            return values.prefix(20).map { val in
                 SQLCompletion(
-                    text: quoteValueIfNeeded(val, column: column, table: resolvedTable),
+                    text: quoteValueIfNeeded(val, column: column, table: resolvedTable, skipQuotes: isInsideQuote),
                     displayText: val,
                     type: .symbol,
                     detail: "from \(resolvedTable)"
                 )
             }
+        } else {
+            // Filter provided: do server-side ILIKE query (don't cache, it's prefix-specific)
+            let values = await fetch(resolvedTable, column, filter, 20)
+            
+            // Also populate unfiltered cache if missing (for future queries)
+            if valueCache[cacheKey] == nil || valueCache[cacheKey]!.isExpired {
+                let allValues = await fetch(resolvedTable, column, "", maxCachedValues)
+                valueCache[cacheKey] = ValueCacheEntry(values: allValues, fetchedAt: Date())
+            }
+            
+            return values.prefix(20).map { val in
+                SQLCompletion(
+                    text: quoteValueIfNeeded(val, column: column, table: resolvedTable, skipQuotes: isInsideQuote),
+                    displayText: val,
+                    type: .symbol,
+                    detail: "from \(resolvedTable)"
+                )
+            }
+        }
     }
     
     /// Wraps value in quotes if the column type is text/varchar/uuid/etc.
-    private func quoteValueIfNeeded(_ value: String, column: String, table: String) -> String {
+    /// When skipQuotes is true (cursor is already inside a quote), returns the raw value.
+    private func quoteValueIfNeeded(_ value: String, column: String, table: String, skipQuotes: Bool = false) -> String {
         guard let cols = tableColumns[table],
               let col = cols.first(where: { $0.name.lowercased() == column.lowercased() }) else {
-            return "'\(value)'"
+            return skipQuotes ? value : "'\(value)'"
         }
         
         let dt = col.dataType.lowercased()
@@ -1185,6 +1213,9 @@ class SmartAutocompleteEngine {
             return value
         } else if boolTypes.contains(where: { dt.contains($0) }) {
             return value
+        } else if skipQuotes {
+            // Already inside a quote, return raw value (with escaped inner quotes)
+            return value.replacingOccurrences(of: "'", with: "''")
         } else {
             // Escape single quotes in value
             let escaped = value.replacingOccurrences(of: "'", with: "''")
@@ -1234,6 +1265,28 @@ class SmartAutocompleteEngine {
     
     // MARK: - Query Parsing
     
+    /// Detects if the cursor is inside an open single-quote string literal.
+    /// Counts unmatched single quotes in textBefore, treating '' (escaped quote) as a single token.
+    private func isInsideStringLiteral(_ textBefore: String) -> Bool {
+        var quoteCount = 0
+        let chars = Array(textBefore)
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "'" {
+                // Check for escaped quote ('')
+                if i + 1 < chars.count && chars[i + 1] == "'" {
+                    // Escaped quote inside a string, skip both
+                    i += 2
+                    continue
+                }
+                quoteCount += 1
+            }
+            i += 1
+        }
+        // Odd number of unmatched quotes means we're inside a string
+        return quoteCount % 2 != 0
+    }
+    
     /// Parses the full cursor context from the query text and cursor position.
     func parseCursorContext(text: String, cursorPosition: Int) -> CursorContext {
         let pos = min(cursorPosition, text.count)
@@ -1259,6 +1312,9 @@ class SmartAutocompleteEngine {
         // Detect if we're in a value position (after operator)
         let (isAfterOp, precedingCol, precedingTable) = detectValuePosition(textBefore, tables: referencedTables)
         
+        // Detect if cursor is inside an open single-quote string literal
+        let insideQuote = isInsideStringLiteral(textBefore)
+        
         return CursorContext(
             textBeforeCursor: textBefore,
             currentWord: currentWord,
@@ -1268,7 +1324,8 @@ class SmartAutocompleteEngine {
             isAfterOperator: isAfterOp,
             precedingColumnName: precedingCol,
             precedingTableForColumn: precedingTable,
-            commentText: commentText
+            commentText: commentText,
+            isInsideQuote: insideQuote
         )
     }
     

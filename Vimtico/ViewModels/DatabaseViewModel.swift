@@ -676,8 +676,8 @@ class DatabaseViewModel: ObservableObject {
             
             // Wire up the fetchValues callback for value-based completions
             let service = postgresService
-            autocompleteService.smartEngine.fetchValues = { tableName, columnName, limit in
-                await service.fetchDistinctValues(table: tableName, column: columnName, limit: limit)
+            autocompleteService.smartEngine.fetchValues = { tableName, columnName, filter, limit in
+                await service.fetchDistinctValues(table: tableName, column: columnName, filter: filter, limit: limit)
             }
         } catch {
             errorMessage = "Failed to load tables: \(error.localizedDescription)"
