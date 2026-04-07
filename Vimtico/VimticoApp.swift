@@ -454,6 +454,26 @@ struct EditorSettingsView: View {
                 }
             }
             
+            SettingsSection("Results") {
+                SettingRow("Copy format") {
+                    Picker("", selection: Binding(
+                        get: { configManager.configuration.editor?.copyFormat ?? .csv },
+                        set: { newValue in
+                            ensureEditorConfig()
+                            configManager.configuration.editor?.copyFormat = newValue
+                            configManager.saveConfiguration()
+                        }
+                    )) {
+                        ForEach(CopyFormat.allCases, id: \.self) { format in
+                            Text(format.displayName).tag(format)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 120)
+                }
+                SettingHint(text: "Format used when yanking rows or blocks from the results pane.")
+            }
+            
             Spacer()
         }
         .padding(20)

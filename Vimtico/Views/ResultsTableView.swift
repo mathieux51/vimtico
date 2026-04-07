@@ -36,7 +36,13 @@ struct ResultsTableView: View {
                         selectedColumn: viewModel.selectedResultColumn,
                         isFocused: viewModel.focusedPane == .results,
                         visualRowRange: viewModel.visualRowRange,
-                        visualColumnRange: viewModel.visualColumnRange
+                        visualColumnRange: viewModel.visualColumnRange,
+                        editingCell: viewModel.editingCell,
+                        editingText: $viewModel.editingText,
+                        isEditable: viewModel.isResultEditable,
+                        pendingEdits: viewModel.pendingEdits,
+                        onCommitEdit: { viewModel.commitEdit() },
+                        onCancelEdit: { viewModel.cancelEditing() }
                     )
                 }
                 
@@ -46,7 +52,9 @@ struct ResultsTableView: View {
                     theme: themeManager.currentTheme,
                     fontSize: resultsFontSize,
                     resultsVimMode: viewModel.resultsVimMode,
-                    isFocused: viewModel.focusedPane == .results
+                    isFocused: viewModel.focusedPane == .results,
+                    isEditable: viewModel.isResultEditable,
+                    isEditing: viewModel.editingCell != nil
                 )
             } else if let info = viewModel.tableInfo {
                 TableInfoView(
@@ -109,6 +117,12 @@ struct ResultsTable: View {
     var isFocused: Bool = false
     var visualRowRange: ClosedRange<Int>? = nil
     var visualColumnRange: ClosedRange<Int>? = nil
+    var editingCell: (row: Int, column: Int)? = nil
+    @Binding var editingText: String
+    var isEditable: Bool = false
+    var pendingEdits: [Int: [Int: String]] = [:]
+    var onCommitEdit: (() -> Void)? = nil
+    var onCancelEdit: (() -> Void)? = nil
     
     /// Compute a fixed width per column based on the longest value (header or data).
     private var columnWidths: [CGFloat] {
@@ -149,7 +163,13 @@ struct ResultsTable: View {
                                     isInVisualSelection: isFocused && isInVisualRow,
                                     visualColumnRange: isFocused ? visualColumnRange : nil,
                                     theme: theme,
-                                    fontSize: fontSize
+                                    fontSize: fontSize,
+                                    editingColumn: editingCell?.row == index ? editingCell?.column : nil,
+                                    editingText: editingCell?.row == index ? $editingText : nil,
+                                    pendingEdits: pendingEdits[index],
+                                    isEditable: isEditable,
+                                    onCommitEdit: onCommitEdit,
+                                    onCancelEdit: onCancelEdit
                                 )
                             }
                         } header: {
@@ -233,6 +253,12 @@ struct ResultRow: View {
     var visualColumnRange: ClosedRange<Int>? = nil
     let theme: Theme
     let fontSize: CGFloat
+    var editingColumn: Int? = nil
+    var editingText: Binding<String>? = nil
+    var pendingEdits: [Int: String]? = nil
+    var isEditable: Bool = false
+    var onCommitEdit: (() -> Void)? = nil
+    var onCancelEdit: (() -> Void)? = nil
     @State private var copiedIndex: Int? = nil
     
     var body: some View {
@@ -257,7 +283,10 @@ struct ResultRow: View {
         return isAlternate ? theme.tableAlternateRowColor : theme.backgroundColor
     }
     
-    private func cellBackground(isCellSelected: Bool, isVisualCell: Bool) -> Color {
+    private func cellBackground(isCellSelected: Bool, isVisualCell: Bool, hasPendingEdit: Bool = false) -> Color {
+        if hasPendingEdit {
+            return theme.warningColor.opacity(0.15)
+        }
         if isCellSelected {
             return theme.accentColor.opacity(0.35)
         }
@@ -270,46 +299,90 @@ struct ResultRow: View {
         return Color.clear
     }
     
-    private func cellForeground(value: String, isCopied: Bool) -> Color {
+    private func cellForeground(value: String, isCopied: Bool, hasPendingEdit: Bool = false) -> Color {
         if isCopied { return theme.successColor }
+        if hasPendingEdit { return theme.warningColor }
         if value == "NULL" { return theme.commentColor }
         return theme.foregroundColor
     }
     
     @ViewBuilder
     private func cellView(at index: Int) -> some View {
-        let value = index < values.count ? values[index] : ""
+        let value = pendingEdits?[index] ?? (index < values.count ? values[index] : "")
         let isCellSelected = isSelected && selectedColumn == index
         let isVisualCell = isInVisualSelection && (visualColumnRange == nil || visualColumnRange!.contains(index))
         let isCopied = copiedIndex == index
         let width: CGFloat = index < columnWidths.count ? columnWidths[index] : 100
+        let hasPendingEdit = pendingEdits?[index] != nil
+        let isEditingThisCell = editingColumn == index
         
-        Text(isCopied ? "Copied!" : value)
-            .font(.system(size: fontSize, design: .monospaced))
-            .foregroundColor(cellForeground(value: value, isCopied: isCopied))
-            .frame(width: width, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .lineLimit(1)
-            .background(cellBackground(isCellSelected: isCellSelected, isVisualCell: isVisualCell))
-            .overlay(
-                isCellSelected ?
-                RoundedRectangle(cornerRadius: 2)
-                    .stroke(theme.accentColor.opacity(0.8), lineWidth: 2)
-                : nil
+        if isEditingThisCell, let binding = editingText {
+            EditingCellView(
+                text: binding,
+                width: width,
+                fontSize: fontSize,
+                theme: theme,
+                onCommit: { onCommitEdit?() },
+                onCancel: { onCancelEdit?() }
             )
-            .contentShape(Rectangle())
             .id("cell-\(rowIndex)-\(index)")
-            .onTapGesture {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(value, forType: .string)
-                copiedIndex = index
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    if copiedIndex == index {
-                        copiedIndex = nil
+        } else {
+            Text(isCopied ? "Copied!" : value)
+                .font(.system(size: fontSize, design: .monospaced))
+                .foregroundColor(cellForeground(value: value, isCopied: isCopied, hasPendingEdit: hasPendingEdit))
+                .frame(width: width, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .lineLimit(1)
+                .background(cellBackground(isCellSelected: isCellSelected, isVisualCell: isVisualCell, hasPendingEdit: hasPendingEdit))
+                .overlay(
+                    isCellSelected ?
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(isEditable ? theme.successColor.opacity(0.8) : theme.accentColor.opacity(0.8), lineWidth: 2)
+                    : nil
+                )
+                .contentShape(Rectangle())
+                .id("cell-\(rowIndex)-\(index)")
+                .onTapGesture {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(value, forType: .string)
+                    copiedIndex = index
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        if copiedIndex == index {
+                            copiedIndex = nil
+                        }
                     }
                 }
-            }
+        }
+    }
+}
+
+/// An inline text field for editing a cell value.
+struct EditingCellView: View {
+    @Binding var text: String
+    let width: CGFloat
+    let fontSize: CGFloat
+    let theme: Theme
+    var onCommit: () -> Void
+    var onCancel: () -> Void
+    @FocusState private var isFocused: Bool
+    
+    var body: some View {
+        TextField("", text: $text)
+            .font(.system(size: fontSize, design: .monospaced))
+            .textFieldStyle(.plain)
+            .frame(width: width, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(theme.editorBackgroundColor)
+            .overlay(
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(theme.successColor, lineWidth: 2)
+            )
+            .focused($isFocused)
+            .onAppear { isFocused = true }
+            .onSubmit { onCommit() }
+            .onExitCommand { onCancel() }
     }
 }
 
@@ -319,6 +392,8 @@ struct StatusBar: View {
     let fontSize: CGFloat
     var resultsVimMode: ResultsVimMode = .normal
     var isFocused: Bool = false
+    var isEditable: Bool = false
+    var isEditing: Bool = false
     
     var body: some View {
         HStack {
@@ -327,6 +402,14 @@ struct StatusBar: View {
                 Text("-- \(resultsVimMode.rawValue) --")
                     .font(.system(size: max(fontSize - 2, 10), weight: .bold, design: .monospaced))
                     .foregroundColor(theme.keywordColor)
+                    .padding(.trailing, 4)
+            }
+            
+            // Edit mode indicator
+            if isFocused && isEditing {
+                Text("-- EDIT --")
+                    .font(.system(size: max(fontSize - 2, 10), weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.successColor)
                     .padding(.trailing, 4)
             }
             
@@ -343,6 +426,13 @@ struct StatusBar: View {
                 Text("\(result.columns.count) columns")
                     .font(.system(size: max(fontSize - 2, 10), design: .monospaced))
                     .foregroundColor(theme.foregroundColor.opacity(0.7))
+            }
+            
+            if isEditable {
+                Text("editable")
+                    .font(.system(size: max(fontSize - 2, 10), weight: .medium, design: .monospaced))
+                    .foregroundColor(theme.successColor)
+                    .padding(.leading, 4)
             }
         }
         .padding(.horizontal)
@@ -486,7 +576,8 @@ struct TableInfoView: View {
                 fontSize: fontSize,
                 selectedRow: selectedRow,
                 selectedColumn: selectedColumn,
-                isFocused: isFocused
+                isFocused: isFocused,
+                editingText: .constant("")
             )
             
             // Footer status

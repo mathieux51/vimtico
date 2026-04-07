@@ -68,6 +68,24 @@ class DatabaseViewModel: ObservableObject {
     @Published var showCopiedFeedback: Bool = false
     private var copiedFeedbackTask: Task<Void, Never>?
     
+    // MARK: - Data Editing
+    
+    /// Whether the current result set is editable (from a simple single-table query).
+    @Published var isResultEditable: Bool = false
+    /// Schema and table name for the editable result set.
+    var editableSchema: String = "public"
+    var editableTableName: String = ""
+    /// Primary key column indices in the result set (used to build WHERE clauses).
+    var editablePKIndices: [Int] = []
+    /// Column metadata for the editable table (used for type-aware SQL generation).
+    var editableColumns: [DatabaseColumn] = []
+    /// The cell currently being edited, or nil if not editing.
+    @Published var editingCell: (row: Int, column: Int)? = nil
+    /// The text being edited in the current cell.
+    @Published var editingText: String = ""
+    /// Pending edits that have not been committed yet (row -> (column -> newValue)).
+    @Published var pendingEdits: [Int: [Int: String]] = [:]
+    
     func flashCopiedFeedback() {
         copiedFeedbackTask?.cancel()
         showCopiedFeedback = true
@@ -119,35 +137,347 @@ class DatabaseViewModel: ObservableObject {
         resultsVimMode = .visualBlock
     }
     
-    /// Build tab-separated text for the current visual selection.
-    func yankVisualSelection(rows: [[String]], columns: [String]) -> String? {
+    /// Build formatted text for the current visual selection.
+    func yankVisualSelection(rows: [[String]], columns: [String], format: CopyFormat = .csv) -> String? {
         guard let rowRange = visualRowRange else { return nil }
         
-        var lines: [String] = []
+        let selectedColumns: [String]
+        let selectedRows: [[String]]
         
         switch resultsVimMode {
         case .visualLine:
-            // Copy all columns for each selected row, with header
-            lines.append(columns.joined(separator: "\t"))
-            for r in rowRange {
-                guard r < rows.count else { continue }
-                lines.append(rows[r].joined(separator: "\t"))
-            }
+            selectedColumns = columns
+            selectedRows = rowRange.compactMap { r in r < rows.count ? rows[r] : nil }
         case .visualBlock:
             guard let colRange = visualColumnRange else { return nil }
-            // Copy only the selected columns for each selected row, with header
-            let headerSlice = colRange.compactMap { c in c < columns.count ? columns[c] : nil }
-            lines.append(headerSlice.joined(separator: "\t"))
-            for r in rowRange {
-                guard r < rows.count else { continue }
-                let slice = colRange.compactMap { c in c < rows[r].count ? rows[r][c] : nil }
-                lines.append(slice.joined(separator: "\t"))
+            selectedColumns = colRange.compactMap { c in c < columns.count ? columns[c] : nil }
+            selectedRows = rowRange.compactMap { r in
+                guard r < rows.count else { return nil }
+                return colRange.compactMap { c in c < rows[r].count ? rows[r][c] : nil }
             }
         case .normal:
             return nil
         }
         
+        switch format {
+        case .csv:
+            return formatCSV(columns: selectedColumns, rows: selectedRows)
+        case .json:
+            return formatJSON(columns: selectedColumns, rows: selectedRows)
+        }
+    }
+    
+    /// Format rows as CSV (RFC 4180 compliant).
+    private func formatCSV(columns: [String], rows: [[String]]) -> String {
+        var lines: [String] = []
+        lines.append(columns.map { escapeCSV($0) }.joined(separator: ","))
+        for row in rows {
+            lines.append(row.map { escapeCSV($0) }.joined(separator: ","))
+        }
         return lines.joined(separator: "\n")
+    }
+    
+    /// Escape a value for CSV. Quotes the field if it contains commas, quotes, or newlines.
+    private func escapeCSV(_ value: String) -> String {
+        if value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r") {
+            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        return value
+    }
+    
+    /// Format rows as a JSON array of objects.
+    private func formatJSON(columns: [String], rows: [[String]]) -> String {
+        var objects: [[String: String]] = []
+        for row in rows {
+            var obj: [String: String] = [:]
+            for (i, col) in columns.enumerated() {
+                obj[col] = i < row.count ? row[i] : ""
+            }
+            objects.append(obj)
+        }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: objects.map { dict in
+                // Preserve column order by building ordered dictionaries manually.
+                // JSONSerialization doesn't preserve order, so we use a custom approach.
+                dict as [String: Any]
+            },
+            options: [.prettyPrinted, .sortedKeys]
+        ) else { return "[]" }
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+    
+    // MARK: - Data Editing
+    
+    /// Attempt to parse a simple SELECT query to extract the source table.
+    /// Supports: SELECT ... FROM [schema.]table [WHERE ...] patterns.
+    /// Returns (schema, table) or nil if the query is too complex to edit.
+    func parseEditableTable(from sql: String) -> (schema: String, table: String)? {
+        let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        
+        // Must be a SELECT query
+        guard trimmed.hasPrefix("select") else { return nil }
+        
+        // Reject queries with JOINs, UNIONs, subqueries, CTEs, or GROUP BY.
+        // These produce derived result sets that cannot be updated directly.
+        let disallowed = [" join ", " union ", " intersect ", " except ", " group by ", " having "]
+        for keyword in disallowed {
+            if trimmed.contains(keyword) { return nil }
+        }
+        
+        // Extract table from FROM clause
+        guard let fromRange = trimmed.range(of: "\\bfrom\\s+", options: .regularExpression) else { return nil }
+        let afterFrom = String(trimmed[fromRange.upperBound...])
+        
+        // Get the first word(s) after FROM (possibly schema.table)
+        let tablePattern = #"^([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)(?:\s|$|;)"#
+        guard let match = afterFrom.range(of: tablePattern, options: .regularExpression) else { return nil }
+        let tablePart = String(afterFrom[match]).trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+        
+        // Check for a second FROM (subquery) after the table name
+        let afterTable = String(afterFrom[match.upperBound...])
+        if afterTable.contains(" from ") { return nil }
+        
+        let components = tablePart.split(separator: ".")
+        if components.count == 2 {
+            return (schema: String(components[0]), table: String(components[1]))
+        } else if components.count == 1 {
+            return (schema: "public", table: String(components[0]))
+        }
+        return nil
+    }
+    
+    /// After executing a query, check if the results are editable and fetch PK info.
+    func checkEditability(forQuery sql: String) {
+        // Reset editing state
+        isResultEditable = false
+        editableTableName = ""
+        editableSchema = "public"
+        editablePKIndices = []
+        editableColumns = []
+        pendingEdits = [:]
+        editingCell = nil
+        
+        guard let (schema, table) = parseEditableTable(from: sql) else { return }
+        
+        Task {
+            do {
+                let columns = try await postgresService.fetchColumns(
+                    for: DatabaseTable(schema: schema, name: table, type: .table)
+                )
+                
+                guard let result = queryResult else { return }
+                
+                // Find PK columns in the result set
+                let pkColumns = columns.filter { $0.isPrimaryKey }
+                guard !pkColumns.isEmpty else { return }
+                
+                var pkIndices: [Int] = []
+                for pk in pkColumns {
+                    if let idx = result.columns.firstIndex(of: pk.name) {
+                        pkIndices.append(idx)
+                    }
+                }
+                
+                // All PK columns must be present in the result set
+                guard pkIndices.count == pkColumns.count else { return }
+                
+                editableSchema = schema
+                editableTableName = table
+                editablePKIndices = pkIndices
+                editableColumns = columns
+                isResultEditable = true
+            } catch {
+                // Silently fail. Results are just not editable.
+            }
+        }
+    }
+    
+    /// Start editing a cell. Call this when the user presses `i` on a selected cell.
+    func startEditing(row: Int, column: Int) {
+        guard isResultEditable, let result = queryResult,
+              row < result.rows.count, column < result.columns.count else { return }
+        
+        // Use the pending edit value if one exists, otherwise the original value
+        let currentValue = pendingEdits[row]?[column] ?? result.rows[row][column]
+        editingCell = (row: row, column: column)
+        editingText = currentValue == "NULL" ? "" : currentValue
+    }
+    
+    /// Cancel the current cell edit.
+    func cancelEditing() {
+        editingCell = nil
+        editingText = ""
+    }
+    
+    /// Commit the current cell edit. Generates and executes an UPDATE statement,
+    /// then updates the local result set on success.
+    func commitEdit() {
+        guard let cell = editingCell, let result = queryResult,
+              cell.row < result.rows.count, cell.column < result.columns.count else {
+            cancelEditing()
+            return
+        }
+        
+        let originalValue = result.rows[cell.row][cell.column]
+        let newValue = editingText
+        
+        // No change, just cancel
+        if newValue == originalValue || (originalValue == "NULL" && newValue.isEmpty) {
+            cancelEditing()
+            return
+        }
+        
+        let columnName = result.columns[cell.column]
+        
+        // Build WHERE clause from PK values
+        let whereClause = buildWhereClause(forRow: cell.row, result: result)
+        guard !whereClause.isEmpty else {
+            errorMessage = "Cannot edit: unable to build WHERE clause from primary key columns"
+            cancelEditing()
+            return
+        }
+        
+        // Build the SET value
+        let setValue = buildSetValue(newValue: newValue, columnName: columnName)
+        
+        let sql = "update \(editableSchema).\(editableTableName) set \(escapeSQLIdentifier(columnName)) = \(setValue) where \(whereClause)"
+        
+        let editRow = cell.row
+        let editCol = cell.column
+        let editText = editingText
+        
+        cancelEditing()
+        
+        Task {
+            do {
+                _ = try await postgresService.executeQuery(sql)
+                
+                // Update the local result set
+                if var rows = queryResult?.rows, editRow < rows.count {
+                    rows[editRow][editCol] = editText.isEmpty ? "NULL" : editText
+                    queryResult = QueryResult(
+                        columns: result.columns,
+                        rows: rows,
+                        rowsAffected: result.rowsAffected,
+                        executionTime: result.executionTime
+                    )
+                }
+                
+                // Remove from pending edits if it was there
+                pendingEdits[editRow]?[editCol] = nil
+                if pendingEdits[editRow]?.isEmpty == true {
+                    pendingEdits.removeValue(forKey: editRow)
+                }
+            } catch {
+                errorMessage = "Edit failed: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    /// Delete the selected row. Generates and executes a DELETE statement.
+    func deleteRow(at rowIndex: Int) {
+        guard isResultEditable, let result = queryResult,
+              rowIndex < result.rows.count else { return }
+        
+        let whereClause = buildWhereClause(forRow: rowIndex, result: result)
+        guard !whereClause.isEmpty else {
+            errorMessage = "Cannot delete: unable to build WHERE clause from primary key columns"
+            return
+        }
+        
+        let sql = "delete from \(editableSchema).\(editableTableName) where \(whereClause)"
+        
+        Task {
+            do {
+                _ = try await postgresService.executeQuery(sql)
+                
+                // Remove the row from the local result set
+                if var rows = queryResult?.rows {
+                    rows.remove(at: rowIndex)
+                    queryResult = QueryResult(
+                        columns: result.columns,
+                        rows: rows,
+                        rowsAffected: result.rowsAffected,
+                        executionTime: result.executionTime
+                    )
+                    
+                    // Adjust selection
+                    if let sel = selectedResultRow {
+                        if sel >= rows.count {
+                            selectedResultRow = max(rows.count - 1, 0)
+                        }
+                    }
+                    
+                    // Clear pending edits for deleted and shifted rows
+                    pendingEdits.removeValue(forKey: rowIndex)
+                    var shifted: [Int: [Int: String]] = [:]
+                    for (key, value) in pendingEdits {
+                        if key > rowIndex {
+                            shifted[key - 1] = value
+                        } else {
+                            shifted[key] = value
+                        }
+                    }
+                    pendingEdits = shifted
+                }
+            } catch {
+                errorMessage = "Delete failed: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    // MARK: - SQL Generation Helpers
+    
+    private func buildWhereClause(forRow rowIndex: Int, result: QueryResult) -> String {
+        var conditions: [String] = []
+        for pkIdx in editablePKIndices {
+            guard pkIdx < result.columns.count, rowIndex < result.rows.count,
+                  pkIdx < result.rows[rowIndex].count else { return "" }
+            let colName = escapeSQLIdentifier(result.columns[pkIdx])
+            let value = result.rows[rowIndex][pkIdx]
+            if value == "NULL" {
+                conditions.append("\(colName) is null")
+            } else {
+                conditions.append("\(colName) = \(escapeSQLValue(value))")
+            }
+        }
+        return conditions.joined(separator: " and ")
+    }
+    
+    private func buildSetValue(newValue: String, columnName: String) -> String {
+        if newValue.isEmpty {
+            return "null"
+        }
+        
+        // Find the column metadata to determine the type
+        if let colMeta = editableColumns.first(where: { $0.name == columnName }) {
+            let dataType = colMeta.dataType.lowercased()
+            // Numeric and boolean types should not be quoted
+            if dataType.contains("int") || dataType.contains("serial") ||
+               dataType.contains("numeric") || dataType.contains("decimal") ||
+               dataType.contains("float") || dataType.contains("double") ||
+               dataType.contains("real") || dataType == "boolean" || dataType == "bool" {
+                // Validate it looks like a number or boolean
+                let trimmed = newValue.trimmingCharacters(in: .whitespaces).lowercased()
+                if trimmed == "true" || trimmed == "false" ||
+                   Double(trimmed) != nil || Int(trimmed) != nil {
+                    return newValue
+                }
+            }
+        }
+        
+        return escapeSQLValue(newValue)
+    }
+    
+    private func escapeSQLIdentifier(_ name: String) -> String {
+        // Quote identifiers that contain special characters or are reserved words
+        let clean = name.replacingOccurrences(of: "\"", with: "\"\"")
+        return "\"\(clean)\""
+    }
+    
+    private func escapeSQLValue(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: "''")
+        return "'\(escaped)'"
     }
     
     // Pane navigation (Ctrl-w sequence)
@@ -529,6 +859,7 @@ class DatabaseViewModel: ObservableObject {
                 
                 addToHistory(query: query, connectionId: connection.id, wasSuccessful: true)
                 autocompleteService.recordQuery(query, connectionId: connection.id)
+                checkEditability(forQuery: query)
             } catch is CancellationError {
                 let executionTime = Date().timeIntervalSince(startTime)
                 queryResult = QueryResult(
@@ -633,6 +964,7 @@ class DatabaseViewModel: ObservableObject {
                 
                 addToHistory(query: query, connectionId: connection.id, wasSuccessful: true)
                 autocompleteService.recordQuery(query, connectionId: connection.id)
+                checkEditability(forQuery: query)
             } catch is CancellationError {
                 let executionTime = Date().timeIntervalSince(startTime)
                 queryResult = QueryResult(

@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var editorHeight: CGFloat? = nil
     @State private var showingKeybindings = false
+    @State private var resultsPendingD = false
     
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -210,6 +211,16 @@ struct ContentView: View {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if mods.contains(.command) { return event }
         
+        // When a cell is being edited, only handle Escape (cancel).
+        // All other keys pass through to the editing TextField.
+        if viewModel.editingCell != nil {
+            if event.keyCode == 53 {
+                viewModel.cancelEditing()
+                return nil
+            }
+            return event
+        }
+        
         // Escape exits visual mode (or cancels filter)
         if event.keyCode == 53 {
             if viewModel.resultsVimMode != .normal {
@@ -274,6 +285,8 @@ struct ContentView: View {
             let rowCount = rows.count
             let colCount = result.columns.count
             if rowCount > 0 {
+                let wasPendingD = resultsPendingD
+                resultsPendingD = false
                 switch chars {
                 case "V":
                     // V enters/exits visual line mode
@@ -307,10 +320,28 @@ struct ContentView: View {
                     viewModel.selectedResultRow = 0
                 case "G":
                     viewModel.selectedResultRow = rowCount - 1
+                case "i", "\r":
+                    // Enter edit mode on selected cell (i = vim insert, Enter = convenience)
+                    if viewModel.isResultEditable,
+                       let row = viewModel.selectedResultRow, row < rows.count {
+                        viewModel.startEditing(row: row, column: viewModel.selectedResultColumn)
+                    }
+                case "d":
+                    if viewModel.isResultEditable && viewModel.resultsVimMode == .normal {
+                        if wasPendingD {
+                            // dd: delete current row
+                            if let row = viewModel.selectedResultRow, row < rows.count {
+                                viewModel.deleteRow(at: row)
+                            }
+                        } else {
+                            resultsPendingD = true
+                        }
+                    }
                 case "y":
+                    let copyFormat = configManager.configuration.editor?.copyFormat ?? .csv
                     if viewModel.resultsVimMode != .normal {
                         // Yank visual selection
-                        if let text = viewModel.yankVisualSelection(rows: rows, columns: result.columns) {
+                        if let text = viewModel.yankVisualSelection(rows: rows, columns: result.columns, format: copyFormat) {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(text, forType: .string)
                             viewModel.flashCopiedFeedback()

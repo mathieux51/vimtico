@@ -44,6 +44,7 @@ struct EditorConfig: Codable {
     var wordWrap: Bool
     var showLineNumbers: Bool
     var autocompleteMode: AutocompleteMode
+    var copyFormat: CopyFormat
     var openAIApiKey: String?
     var anthropicApiKey: String?
     var anthropicModel: AnthropicModel?
@@ -70,6 +71,7 @@ struct EditorConfig: Codable {
         wordWrap: Bool = true,
         showLineNumbers: Bool = true,
         autocompleteMode: AutocompleteMode = .ruleBased,
+        copyFormat: CopyFormat = .csv,
         openAIApiKey: String? = nil,
         anthropicApiKey: String? = nil,
         anthropicModel: AnthropicModel? = nil
@@ -81,9 +83,23 @@ struct EditorConfig: Codable {
         self.wordWrap = wordWrap
         self.showLineNumbers = showLineNumbers
         self.autocompleteMode = autocompleteMode
+        self.copyFormat = copyFormat
         self.openAIApiKey = openAIApiKey
         self.anthropicApiKey = anthropicApiKey
         self.anthropicModel = anthropicModel
+    }
+}
+
+/// Copy format for yanking results
+enum CopyFormat: String, Codable, CaseIterable {
+    case csv = "csv"
+    case json = "json"
+    
+    var displayName: String {
+        switch self {
+        case .csv: return "CSV"
+        case .json: return "JSON"
+        }
     }
 }
 
