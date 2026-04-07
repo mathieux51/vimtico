@@ -230,6 +230,14 @@ struct GeneralSettingsView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            // Show config load/save errors
+            if let loadErr = configManager.loadError {
+                configErrorBanner(message: loadErr)
+            }
+            if let saveErr = configManager.saveError {
+                configErrorBanner(message: saveErr)
+            }
+            
             SettingsSection("Appearance") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Theme")
@@ -322,6 +330,22 @@ struct GeneralSettingsView: View {
         } message: {
             Text("This will reset all configuration to defaults. This cannot be undone.")
         }
+    }
+    
+    @ViewBuilder
+    private func configErrorBanner(message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.red)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(.red)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.1))
+        .cornerRadius(6)
     }
 }
 

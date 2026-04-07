@@ -231,8 +231,13 @@ class DatabaseViewModel: ObservableObject {
     /// Attempts to auto-connect to the last used database connection.
     func autoConnectIfPossible() {
         guard let idString = UserDefaults.standard.string(forKey: lastConnectionKey),
-              let uuid = UUID(uuidString: idString),
-              let connection = connections.first(where: { $0.id == uuid }) else {
+              let uuid = UUID(uuidString: idString) else {
+            return
+        }
+        guard let connection = connections.first(where: { $0.id == uuid }) else {
+            // Saved connection was deleted. Clear the stale reference.
+            UserDefaults.standard.removeObject(forKey: lastConnectionKey)
+            errorMessage = "Auto-connect failed: saved connection no longer exists"
             return
         }
         Task {

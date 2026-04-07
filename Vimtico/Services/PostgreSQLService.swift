@@ -54,12 +54,26 @@ actor PostgreSQLService {
                 tls: dbConnection.useSSL ? .require(try .init(configuration: .clientDefault)) : .disable
             )
             
-            connection = try await PostgresConnection.connect(
-                on: eventLoopGroup.next(),
-                configuration: config,
-                id: 1,
-                logger: logger
-            )
+            // Connect with a 5-second timeout to avoid hanging on unreachable servers
+            connection = try await withThrowingTaskGroup(of: PostgresConnection.self) { group in
+                group.addTask {
+                    try await PostgresConnection.connect(
+                        on: self.eventLoopGroup.next(),
+                        configuration: config,
+                        id: 1,
+                        logger: self.logger
+                    )
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                    throw PostgresError.connectionFailed(
+                        "Connection timed out after 5 seconds. Verify that PostgreSQL is running on \(effectiveHost):\(effectivePort) and is reachable."
+                    )
+                }
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
         } catch let error as PostgresError {
             // Re-throw our own errors as-is
             throw error

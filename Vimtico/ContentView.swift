@@ -24,6 +24,9 @@ struct ContentView: View {
         } detail: {
             GeometryReader { geo in
                 VStack(spacing: 0) {
+                    // Error banner for connection/loading errors
+                    errorBanner
+                    
                     QueryEditorView(viewModel: viewModel)
                         .frame(height: editorHeight ?? geo.size.height / 2)
                         .overlay(
@@ -116,6 +119,29 @@ struct ContentView: View {
             Rectangle()
                 .fill(themeManager.currentTheme.vimNormalModeColor)
                 .frame(height: 2)
+        }
+    }
+    
+    @ViewBuilder
+    private var errorBanner: some View {
+        if let error = viewModel.errorMessage {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(themeManager.currentTheme.errorColor)
+                Text(error)
+                    .font(.system(size: viewModel.fontSize - 2, design: .monospaced))
+                    .foregroundColor(themeManager.currentTheme.errorColor)
+                    .lineLimit(2)
+                Spacer()
+                Button(action: { viewModel.errorMessage = nil }) {
+                    Image(systemName: "xmark")
+                        .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(themeManager.currentTheme.errorColor.opacity(0.15))
         }
     }
     
