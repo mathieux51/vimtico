@@ -434,6 +434,7 @@ actor PostgreSQLService {
             let response = try await executeQuery(sql)
             return response.rows.compactMap { $0.first }
         } catch {
+            logger.warning("fetchDistinctValues failed for \(table).\(column): \(error.localizedDescription)")
             return []
         }
     }

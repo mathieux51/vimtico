@@ -450,6 +450,7 @@ class DatabaseViewModel: ObservableObject {
         tables = []
         selectedTable = nil
         queryResult = nil
+        errorMessage = nil
     }
     
     /// Reconnects to the current database (Cmd+R).
@@ -548,6 +549,7 @@ class DatabaseViewModel: ObservableObject {
     func selectTable(_ table: DatabaseTable) {
         selectedTable = table
         queryResult = nil
+        errorMessage = nil
         isLoading = true
         
         Task {
@@ -669,11 +671,17 @@ class DatabaseViewModel: ObservableObject {
         do {
             tables = try await postgresService.fetchTables()
             
-            // Load columns for all tables (rich metadata for smart autocomplete)
+            // Load columns for all tables (rich metadata for smart autocomplete).
+            // Wrap each table individually so one failure doesn't abort the rest.
             var columnsByTable: [String: [DatabaseColumn]] = [:]
             for table in tables {
-                let columns = try await postgresService.fetchColumns(for: table)
-                columnsByTable[table.name] = columns
+                do {
+                    let columns = try await postgresService.fetchColumns(for: table)
+                    columnsByTable[table.name] = columns
+                } catch {
+                    // Log but continue loading other tables
+                    print("[Vimtico] Failed to load columns for \(table.schema).\(table.name): \(error.localizedDescription)")
+                }
             }
             
             // Feed the smart engine with full schema + rich column data
