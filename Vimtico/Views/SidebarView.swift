@@ -8,28 +8,21 @@ struct SidebarView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Connection error banner (shown in sidebar so user sees it immediately)
-            if let error = viewModel.errorMessage {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(themeManager.currentTheme.errorColor)
-                        .font(.system(size: max(viewModel.fontSize - 2, 10)))
-                    Text(error)
-                        .font(.system(size: max(viewModel.fontSize - 2, 10), design: .monospaced))
-                        .foregroundColor(themeManager.currentTheme.errorColor)
-                        .lineLimit(3)
-                    Spacer()
-                    Button(action: { viewModel.errorMessage = nil }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: max(viewModel.fontSize - 4, 9)))
-                            .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
+            // Sidebar header with add button
+            HStack {
+                Text("Connections")
+                    .font(.system(size: max(viewModel.fontSize - 2, 10), weight: .semibold))
+                    .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.7))
+                Spacer()
+                Button(action: { showingConnectionSheet = true }) {
+                    Image(systemName: "plus")
+                        .foregroundColor(themeManager.currentTheme.foregroundColor.opacity(0.7))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(themeManager.currentTheme.errorColor.opacity(0.15))
+                .buttonStyle(.plain)
+                .help("New Connection")
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             
             ScrollViewReader { proxy in
                 List(selection: $viewModel.selectedConnection) {
@@ -111,14 +104,6 @@ struct SidebarView: View {
             }
         }
         .frame(minWidth: 200)
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button(action: { showingConnectionSheet = true }) {
-                    Image(systemName: "plus")
-                }
-                .help("New Connection")
-            }
-        }
     }
     
     private func toggleExpanded(_ id: UUID) {

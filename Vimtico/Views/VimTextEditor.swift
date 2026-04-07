@@ -65,6 +65,8 @@ struct VimTextEditor: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.autoresizingMask = [.width, .height]
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsetsZero
         // Frame will be set in layout, start with placeholder
         scrollView.frame = NSRect(x: Self.gutterWidth, y: 0,
                                   width: max(container.bounds.width - Self.gutterWidth, 200),
@@ -102,8 +104,15 @@ struct VimTextEditor: NSViewRepresentable {
             onTab: onTab
         )
         
-        // Original working inset, no gutter offset needed
-        textView.textContainerInset = NSSize(width: 4, height: 8)
+        // Zero vertical inset so text starts at top
+        textView.textContainerInset = NSSize(width: 4, height: 0)
+        
+        // Ensure no paragraph spacing before first line
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.paragraphSpacingBefore = 0
+        paragraphStyle.paragraphSpacing = 0
+        textView.defaultParagraphStyle = paragraphStyle
+        textView.typingAttributes[.paragraphStyle] = paragraphStyle
         
         scrollView.documentView = textView
         

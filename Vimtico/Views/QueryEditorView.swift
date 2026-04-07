@@ -113,6 +113,7 @@ struct QueryEditorView: View {
                             viewModel.requestAutocomplete(at: viewModel.cursorPosition)
                         }
                     )
+                .clipped()
                 .frame(minHeight: 100)
                 .onChange(of: viewModel.queryText) { _, newValue in
                     // Request autocomplete on text change using actual cursor position
@@ -406,9 +407,10 @@ struct AutocompletePopupView: View {
                 .onChange(of: selectedIndex) { _, newIndex in
                     withAnimation(.easeInOut(duration: 0.1)) {
                         proxy.scrollTo(newIndex, anchor: .center)
-                    }
+                }
                 }
             }
+            .clipped()
         }
         .background(theme.secondaryBackgroundColor)
         .cornerRadius(6)

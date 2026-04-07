@@ -54,6 +54,7 @@ struct ContentView: View {
                 }
             }
         }
+        .toolbar(.hidden, for: .windowToolbar)
         .background(themeManager.currentTheme.backgroundColor)
         .sheet(isPresented: $showingConnectionSheet) {
             ConnectionFormView(viewModel: viewModel, isPresented: $showingConnectionSheet)
@@ -131,7 +132,7 @@ struct ContentView: View {
                 Text(error)
                     .font(.system(size: viewModel.fontSize - 2, design: .monospaced))
                     .foregroundColor(themeManager.currentTheme.errorColor)
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button(action: { viewModel.errorMessage = nil }) {
                     Image(systemName: "xmark")
