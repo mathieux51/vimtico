@@ -1,0 +1,23 @@
+#!/bin/bash
+# Pre-push hook: runs a Debug build to catch compile errors before pushing.
+# This catches obvious Swift errors (type mismatches, missing imports, etc.)
+# but may not catch all issues specific to the CI Xcode version.
+
+set -e
+
+echo "Running pre-push build check..."
+
+# Run a Debug build (faster than Release archive)
+if ! xcodebuild -project Vimtico.xcodeproj \
+  -scheme Vimtico \
+  -configuration Debug \
+  build \
+  -derivedDataPath build \
+  -quiet 2>&1; then
+  echo ""
+  echo "BUILD FAILED. Push aborted."
+  echo "Fix the build errors above before pushing."
+  exit 1
+fi
+
+echo "Build check passed."

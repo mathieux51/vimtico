@@ -141,7 +141,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(themeManager.currentTheme.errorColor.opacity(0.15))
+            .background(themeManager.currentTheme.errorColor.opacity(0.25))
         }
     }
     

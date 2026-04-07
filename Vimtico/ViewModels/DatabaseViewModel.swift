@@ -434,7 +434,9 @@ class DatabaseViewModel: ObservableObject {
             UserDefaults.standard.set(connection.id.uuidString, forKey: lastConnectionKey)
             await loadTables()
         } catch {
-            errorMessage = error.localizedDescription
+            let msg = error.localizedDescription
+            print("[Vimtico] Connection failed: \(msg)")
+            errorMessage = msg
             isConnected = false
         }
         

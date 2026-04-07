@@ -44,10 +44,14 @@ actor PostgreSQLService {
             }
         }
         
+        // Bind to let constants so they can be safely captured in concurrent code
+        let host = effectiveHost
+        let port = effectivePort
+        
         do {
             let config = PostgresConnection.Configuration(
-                host: effectiveHost,
-                port: effectivePort,
+                host: host,
+                port: port,
                 username: dbConnection.username,
                 password: dbConnection.password,
                 database: dbConnection.database,
@@ -67,7 +71,7 @@ actor PostgreSQLService {
                 group.addTask {
                     try await Task.sleep(nanoseconds: 5_000_000_000)
                     throw PostgresError.connectionFailed(
-                        "Connection timed out after 5 seconds. Verify that PostgreSQL is running on \(effectiveHost):\(effectivePort) and is reachable."
+                        "Connection timed out after 5 seconds. Verify that PostgreSQL is running on \(host):\(port) and is reachable."
                     )
                 }
                 let result = try await group.next()!
@@ -83,7 +87,7 @@ actor PostgreSQLService {
             // Provide contextual hints for common connection issues
             if message.lowercased().contains("connection refused") || message.lowercased().contains("could not connect") {
                 throw PostgresError.connectionFailed(
-                    "\(message). Verify that PostgreSQL is running on \(effectiveHost):\(effectivePort) and accepting connections."
+                    "\(message). Verify that PostgreSQL is running on \(host):\(port) and accepting connections."
                 )
             } else if message.lowercased().contains("password") || message.lowercased().contains("authentication") {
                 throw PostgresError.connectionFailed(
