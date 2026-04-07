@@ -454,6 +454,7 @@ enum PostgresError: LocalizedError {
     case queryFailed(String)
     case sshTunnelFailed(String)
     case tlsError(String)
+    case queryTimeout(seconds: Int)
     
     var errorDescription: String? {
         switch self {
@@ -467,6 +468,8 @@ enum PostgresError: LocalizedError {
             return "SSH tunnel error: \(message)"
         case .tlsError(let message):
             return "TLS/SSL error: \(message)"
+        case .queryTimeout(let seconds):
+            return "Query timed out after \(seconds) seconds. The query may still be running on the server. Consider using EXPLAIN ANALYZE to check query performance, or cancel it manually."
         }
     }
 }

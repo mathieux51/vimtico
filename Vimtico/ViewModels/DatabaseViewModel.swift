@@ -498,9 +498,24 @@ class DatabaseViewModel: ObservableObject {
         let startTime = Date()
         
         runningQueryTask = Task {
+            defer {
+                isLoading = false
+                runningQueryTask = nil
+            }
             do {
                 try Task.checkCancellation()
-                let result = try await postgresService.executeQuery(query)
+                let result = try await withThrowingTaskGroup(of: PostgreSQLService.QueryResponse.self) { group in
+                    group.addTask {
+                        try await self.postgresService.executeQuery(query)
+                    }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 30_000_000_000)
+                        throw PostgresError.queryTimeout(seconds: 30)
+                    }
+                    let res = try await group.next()!
+                    group.cancelAll()
+                    return res
+                }
                 try Task.checkCancellation()
                 
                 let executionTime = Date().timeIntervalSince(startTime)
@@ -521,7 +536,6 @@ class DatabaseViewModel: ObservableObject {
                     error: "Query cancelled"
                 )
             } catch {
-                // Don't update UI if the task was cancelled while the query was in flight
                 guard !Task.isCancelled else { return }
                 
                 let executionTime = Date().timeIntervalSince(startTime)
@@ -531,9 +545,6 @@ class DatabaseViewModel: ObservableObject {
                 )
                 addToHistory(query: query, connectionId: connection.id, wasSuccessful: false)
             }
-            
-            isLoading = false
-            runningQueryTask = nil
         }
     }
     
@@ -591,9 +602,24 @@ class DatabaseViewModel: ObservableObject {
         let startTime = Date()
         
         runningQueryTask = Task {
+            defer {
+                isLoading = false
+                runningQueryTask = nil
+            }
             do {
                 try Task.checkCancellation()
-                let result = try await postgresService.executeQuery(query)
+                let result = try await withThrowingTaskGroup(of: PostgreSQLService.QueryResponse.self) { group in
+                    group.addTask {
+                        try await self.postgresService.executeQuery(query)
+                    }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 30_000_000_000)
+                        throw PostgresError.queryTimeout(seconds: 30)
+                    }
+                    let res = try await group.next()!
+                    group.cancelAll()
+                    return res
+                }
                 try Task.checkCancellation()
                 
                 let executionTime = Date().timeIntervalSince(startTime)
@@ -623,9 +649,6 @@ class DatabaseViewModel: ObservableObject {
                 )
                 addToHistory(query: query, connectionId: connection.id, wasSuccessful: false)
             }
-            
-            isLoading = false
-            runningQueryTask = nil
         }
     }
     
