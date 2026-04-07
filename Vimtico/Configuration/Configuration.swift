@@ -88,6 +88,21 @@ struct EditorConfig: Codable {
         self.anthropicApiKey = anthropicApiKey
         self.anthropicModel = anthropicModel
     }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? "SF Mono"
+        fontSize = try container.decodeIfPresent(Int.self, forKey: .fontSize)
+        tabSize = try container.decodeIfPresent(Int.self, forKey: .tabSize) ?? 4
+        insertSpaces = try container.decodeIfPresent(Bool.self, forKey: .insertSpaces) ?? true
+        wordWrap = try container.decodeIfPresent(Bool.self, forKey: .wordWrap) ?? true
+        showLineNumbers = try container.decodeIfPresent(Bool.self, forKey: .showLineNumbers) ?? true
+        autocompleteMode = try container.decodeIfPresent(AutocompleteMode.self, forKey: .autocompleteMode) ?? .ruleBased
+        copyFormat = try container.decodeIfPresent(CopyFormat.self, forKey: .copyFormat) ?? .csv
+        openAIApiKey = try container.decodeIfPresent(String.self, forKey: .openAIApiKey)
+        anthropicApiKey = try container.decodeIfPresent(String.self, forKey: .anthropicApiKey)
+        anthropicModel = try container.decodeIfPresent(AnthropicModel.self, forKey: .anthropicModel)
+    }
 }
 
 /// Copy format for yanking results
