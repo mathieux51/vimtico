@@ -120,6 +120,32 @@ actor PostgreSQLService {
         }
     }
     
+    /// Lightweight health check. Runs `select 1` with a 5-second timeout.
+    /// Returns `true` if the connection is alive, `false` otherwise.
+    func ping() async -> Bool {
+        guard let conn = connection else { return false }
+        do {
+            let alive = try await withThrowingTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    let rows = try await conn.query("select 1", logger: self.logger)
+                    // Drain the result stream
+                    for try await _ in rows {}
+                    return true
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                    throw PostgresError.connectionFailed("Ping timed out after 5 seconds")
+                }
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
+            return alive
+        } catch {
+            return false
+        }
+    }
+    
     func executeQuery(_ sql: String) async throws -> QueryResponse {
         guard let conn = connection else {
             throw PostgresError.connectionClosed

@@ -508,6 +508,7 @@ class DatabaseViewModel: ObservableObject {
     private var runningQueryTask: Task<Void, Never>?
     private var validationTask: Task<Void, Never>?
     private var autocompleteTask: Task<Void, Never>?
+    private var healthCheckTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Filtered lists
@@ -762,6 +763,7 @@ class DatabaseViewModel: ObservableObject {
             isConnected = true
             // Remember this connection for auto-connect on next launch
             UserDefaults.standard.set(connection.id.uuidString, forKey: lastConnectionKey)
+            startHealthCheck()
             await loadTables()
         } catch {
             let msg = error.localizedDescription
@@ -774,6 +776,7 @@ class DatabaseViewModel: ObservableObject {
     }
     
     func disconnect() {
+        stopHealthCheck()
         Task {
             await postgresService.disconnect()
         }
@@ -793,6 +796,7 @@ class DatabaseViewModel: ObservableObject {
             return
         }
         Task {
+            stopHealthCheck()
             await postgresService.disconnect()
             isConnected = false
             tables = []
@@ -801,6 +805,38 @@ class DatabaseViewModel: ObservableObject {
             tableInfo = nil
             await connect(to: connection)
         }
+    }
+    
+    // MARK: - Connection Health Check
+    
+    /// Starts a periodic health check that pings the database every 15 seconds.
+    /// If the ping fails, the connection is marked as lost and an error is shown.
+    private func startHealthCheck() {
+        stopHealthCheck()
+        healthCheckTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { break }
+                guard let self = self else { break }
+                // Skip ping if a query is already running (it will detect failures itself)
+                guard self.runningQueryTask == nil else { continue }
+                let alive = await self.postgresService.ping()
+                guard !Task.isCancelled else { break }
+                if !alive && self.isConnected {
+                    self.isConnected = false
+                    self.connectedConnection = nil
+                    self.errorMessage = "Connection lost. The database server is no longer reachable. Use Cmd+R to reconnect."
+                    self.stopHealthCheck()
+                    break
+                }
+            }
+        }
+    }
+    
+    /// Stops the periodic health check.
+    private func stopHealthCheck() {
+        healthCheckTask?.cancel()
+        healthCheckTask = nil
     }
     
     // MARK: - Query Execution
