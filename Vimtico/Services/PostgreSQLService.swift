@@ -270,9 +270,12 @@ actor PostgreSQLService {
             }
             
         case .numeric:
-            // numeric/decimal: decode as String to preserve exact precision and scale
-            if let value = try? column.decode(String.self) {
-                return value
+            // numeric/decimal: parse binary format to preserve exact precision and scale.
+            // PostgresNIO's String.self decode interprets binary numeric as UTF-8, producing garbage.
+            if var buf = column.bytes {
+                if let value = decodeNumericFromBuffer(&buf) {
+                    return value
+                }
             }
             
         case .bool:
@@ -340,8 +343,12 @@ actor PostgreSQLService {
                 return formatPgArray(value)
             }
         case .numericArray:
-            if let value = try? column.decode([String].self) {
-                return formatPgArray(value)
+            // Can't use [String].self or [Decimal].self for numeric arrays.
+            // Parse the binary array format manually and decode each element.
+            if var buf = column.bytes {
+                if let elements = decodeNumericArray(&buf) {
+                    return formatPgArray(elements)
+                }
             }
         case .timestamptzArray:
             if let value = try? column.decode([Date].self) {
@@ -790,6 +797,36 @@ actor PostgreSQLService {
             return prefix + intPart
         }
         return prefix + intPart + "." + fracPart
+    }
+    
+    /// Decodes a PostgreSQL numeric[] from binary array format.
+    /// Binary array format: Int32 ndim (0 or 1), Int32 flags, UInt32 element OID,
+    /// Int32 array length, Int32 lower bound (1), then for each element: Int32 len + bytes (-1 for null).
+    private func decodeNumericArray(_ buf: inout ByteBuffer) -> [String]? {
+        guard let ndim = buf.readInteger(as: Int32.self),
+              let _ = buf.readInteger(as: Int32.self), // flags
+              let _ = buf.readInteger(as: UInt32.self) // element OID
+        else { return nil }
+        
+        if ndim == 0 { return [] }
+        guard ndim == 1 else { return nil }
+        
+        guard let count = buf.readInteger(as: Int32.self),
+              let _ = buf.readInteger(as: Int32.self) // lower bound
+        else { return nil }
+        
+        var elements: [String] = []
+        for _ in 0..<count {
+            guard let len = buf.readInteger(as: Int32.self) else { return nil }
+            if len == -1 {
+                elements.append("NULL")
+            } else if var elementBuf = buf.readSlice(length: Int(len)) {
+                elements.append(decodeNumericFromBuffer(&elementBuf) ?? "NULL")
+            } else {
+                return nil
+            }
+        }
+        return elements
     }
     
     func fetchTables() async throws -> [DatabaseTable] {
