@@ -270,11 +270,9 @@ actor PostgreSQLService {
             }
             
         case .numeric:
-            // numeric/decimal: try Double first, fall back to string
-            if let value = try? column.decode(Double.self) {
-                // Format without trailing zeros
-                let str = String(value)
-                return str.hasSuffix(".0") ? String(str.dropLast(2)) : str
+            // numeric/decimal: decode as String to preserve exact precision and scale
+            if let value = try? column.decode(String.self) {
+                return value
             }
             
         case .bool:
@@ -305,7 +303,362 @@ actor PostgreSQLService {
                 return "\\x" + hex
             }
             
+        case .textArray, .varcharArray:
+            if let value = try? column.decode([String].self) {
+                return formatPgArray(value)
+            }
+        case .int2Array:
+            if let value = try? column.decode([Int16].self) {
+                return formatPgArray(value.map { String($0) })
+            }
+        case .int4Array:
+            if let value = try? column.decode([Int32].self) {
+                return formatPgArray(value.map { String($0) })
+            }
+        case .int8Array:
+            if let value = try? column.decode([Int64].self) {
+                return formatPgArray(value.map { String($0) })
+            }
+        case .float4Array:
+            if let value = try? column.decode([Float].self) {
+                return formatPgArray(value.map { String($0) })
+            }
+        case .float8Array:
+            if let value = try? column.decode([Double].self) {
+                return formatPgArray(value.map { String($0) })
+            }
+        case .boolArray:
+            if let value = try? column.decode([Bool].self) {
+                return formatPgArray(value.map { $0 ? "t" : "f" })
+            }
+        case .uuidArray:
+            if let value = try? column.decode([UUID].self) {
+                return formatPgArray(value.map { $0.uuidString.lowercased() })
+            }
+        case .jsonbArray:
+            if let value = try? column.decode([String].self) {
+                return formatPgArray(value)
+            }
+        case .numericArray:
+            if let value = try? column.decode([String].self) {
+                return formatPgArray(value)
+            }
+        case .timestamptzArray:
+            if let value = try? column.decode([Date].self) {
+                let f = DateFormatter()
+                f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSZ"
+                f.timeZone = TimeZone(identifier: "UTC")
+                return formatPgArray(value.map { f.string(from: $0) })
+            }
+            
+        // MARK: - Network address types
+            
+        case .inet, .cidr:
+            // Binary format: 1 byte family (2=IPv4, 3=IPv6), 1 byte prefix bits,
+            // 1 byte is_cidr, 1 byte address length, then address bytes
+            if var buf = column.bytes, buf.readableBytes >= 4 {
+                if let family = buf.readInteger(as: UInt8.self),
+                   let prefixBits = buf.readInteger(as: UInt8.self),
+                   let isCidr = buf.readInteger(as: UInt8.self),
+                   let addrLen = buf.readInteger(as: UInt8.self),
+                   buf.readableBytes >= Int(addrLen) {
+                    if family == 2 && addrLen == 4 {
+                        // IPv4
+                        let bytes = (0..<4).compactMap { _ in buf.readInteger(as: UInt8.self) }
+                        if bytes.count == 4 {
+                            let addr = bytes.map { String($0) }.joined(separator: ".")
+                            if isCidr == 1 || column.dataType == .cidr {
+                                return "\(addr)/\(prefixBits)"
+                            }
+                            return prefixBits < 32 ? "\(addr)/\(prefixBits)" : addr
+                        }
+                    } else if family == 3 && addrLen == 16 {
+                        // IPv6
+                        var groups: [String] = []
+                        for _ in 0..<8 {
+                            if let hi = buf.readInteger(as: UInt8.self),
+                               let lo = buf.readInteger(as: UInt8.self) {
+                                groups.append(String(format: "%x", (UInt16(hi) << 8) | UInt16(lo)))
+                            }
+                        }
+                        if groups.count == 8 {
+                            let addr = groups.joined(separator: ":")
+                            if isCidr == 1 || column.dataType == .cidr {
+                                return "\(addr)/\(prefixBits)"
+                            }
+                            return prefixBits < 128 ? "\(addr)/\(prefixBits)" : addr
+                        }
+                    }
+                }
+            }
+            
+        case .macaddr:
+            // Binary format: 6 bytes
+            if let buf = column.bytes, buf.readableBytesView.count == 6 {
+                return buf.readableBytesView.map { String(format: "%02x", $0) }.joined(separator: ":")
+            }
+            
+        case .macaddr8:
+            // Binary format: 8 bytes
+            if let buf = column.bytes, buf.readableBytesView.count == 8 {
+                return buf.readableBytesView.map { String(format: "%02x", $0) }.joined(separator: ":")
+            }
+            
+        // MARK: - Money
+            
+        case .money:
+            // Binary format: Int64, value in cents
+            if var buf = column.bytes, buf.readableBytes == 8,
+               let cents = buf.readInteger(as: Int64.self) {
+                let dollars = cents / 100
+                let remainder = abs(cents % 100)
+                let sign = cents < 0 ? "-" : ""
+                return String(format: "%@$%lld.%02lld", sign, abs(dollars), remainder)
+            }
+            
+        // MARK: - Geometric types
+            
+        case .point:
+            // Binary format: two Float64 (x, y)
+            if var buf = column.bytes, buf.readableBytes == 16,
+               let x = buf.readInteger(as: UInt64.self),
+               let y = buf.readInteger(as: UInt64.self) {
+                let xVal = Double(bitPattern: x)
+                let yVal = Double(bitPattern: y)
+                return "(\(formatGeoDouble(xVal)),\(formatGeoDouble(yVal)))"
+            }
+            
+        case .lseg:
+            // Binary format: two points (4 Float64)
+            if var buf = column.bytes, buf.readableBytes == 32 {
+                if let x1 = buf.readInteger(as: UInt64.self),
+                   let y1 = buf.readInteger(as: UInt64.self),
+                   let x2 = buf.readInteger(as: UInt64.self),
+                   let y2 = buf.readInteger(as: UInt64.self) {
+                    let p1 = "(\(formatGeoDouble(Double(bitPattern: x1))),\(formatGeoDouble(Double(bitPattern: y1))))"
+                    let p2 = "(\(formatGeoDouble(Double(bitPattern: x2))),\(formatGeoDouble(Double(bitPattern: y2))))"
+                    return "[\(p1),\(p2)]"
+                }
+            }
+            
+        case .box:
+            // Binary format: two points (4 Float64), high point first
+            if var buf = column.bytes, buf.readableBytes == 32 {
+                if let x1 = buf.readInteger(as: UInt64.self),
+                   let y1 = buf.readInteger(as: UInt64.self),
+                   let x2 = buf.readInteger(as: UInt64.self),
+                   let y2 = buf.readInteger(as: UInt64.self) {
+                    let p1 = "(\(formatGeoDouble(Double(bitPattern: x1))),\(formatGeoDouble(Double(bitPattern: y1))))"
+                    let p2 = "(\(formatGeoDouble(Double(bitPattern: x2))),\(formatGeoDouble(Double(bitPattern: y2))))"
+                    return "\(p1),\(p2)"
+                }
+            }
+            
+        case .line:
+            // Binary format: three Float64 (A, B, C) for Ax + By + C = 0
+            if var buf = column.bytes, buf.readableBytes == 24,
+               let a = buf.readInteger(as: UInt64.self),
+               let b = buf.readInteger(as: UInt64.self),
+               let c = buf.readInteger(as: UInt64.self) {
+                return "{\(formatGeoDouble(Double(bitPattern: a))),\(formatGeoDouble(Double(bitPattern: b))),\(formatGeoDouble(Double(bitPattern: c)))}"
+            }
+            
+        case .circle:
+            // Binary format: point (2 Float64) + radius (Float64)
+            if var buf = column.bytes, buf.readableBytes == 24,
+               let x = buf.readInteger(as: UInt64.self),
+               let y = buf.readInteger(as: UInt64.self),
+               let r = buf.readInteger(as: UInt64.self) {
+                return "<(\(formatGeoDouble(Double(bitPattern: x))),\(formatGeoDouble(Double(bitPattern: y)))),\(formatGeoDouble(Double(bitPattern: r)))>"
+            }
+            
+        case .path:
+            // Binary format: 1 byte closed flag, Int32 point count, then N points (each 2 Float64)
+            if var buf = column.bytes, buf.readableBytes >= 5 {
+                if let closed = buf.readInteger(as: UInt8.self),
+                   let count = buf.readInteger(as: Int32.self),
+                   buf.readableBytes == Int(count) * 16 {
+                    var points: [String] = []
+                    for _ in 0..<count {
+                        if let x = buf.readInteger(as: UInt64.self),
+                           let y = buf.readInteger(as: UInt64.self) {
+                            points.append("(\(formatGeoDouble(Double(bitPattern: x))),\(formatGeoDouble(Double(bitPattern: y))))")
+                        }
+                    }
+                    if points.count == Int(count) {
+                        let joined = points.joined(separator: ",")
+                        return closed == 1 ? "(\(joined))" : "[\(joined)]"
+                    }
+                }
+            }
+            
+        case .polygon:
+            // Binary format: Int32 point count, then N points (each 2 Float64)
+            if var buf = column.bytes, buf.readableBytes >= 4 {
+                if let count = buf.readInteger(as: Int32.self),
+                   buf.readableBytes == Int(count) * 16 {
+                    var points: [String] = []
+                    for _ in 0..<count {
+                        if let x = buf.readInteger(as: UInt64.self),
+                           let y = buf.readInteger(as: UInt64.self) {
+                            points.append("(\(formatGeoDouble(Double(bitPattern: x))),\(formatGeoDouble(Double(bitPattern: y))))")
+                        }
+                    }
+                    if points.count == Int(count) {
+                        return "(\(points.joined(separator: ",")))"
+                    }
+                }
+            }
+            
+        // MARK: - Full-text search
+            
+        case .tsvector:
+            // Binary format: Int32 lexeme count, then for each:
+            //   null-terminated string, Int16 position count, then positions (each UInt16)
+            if var buf = column.bytes, buf.readableBytes >= 4 {
+                if let lexemeCount = buf.readInteger(as: Int32.self) {
+                    var lexemes: [String] = []
+                    for _ in 0..<lexemeCount {
+                        // Read null-terminated string
+                        if let nullIndex = buf.readableBytesView.firstIndex(of: 0) {
+                            let len = nullIndex - buf.readableBytesView.startIndex
+                            if let word = buf.readString(length: len) {
+                                buf.moveReaderIndex(forwardBy: 1) // skip null byte
+                                var entry = "'\(word)'"
+                                // Read position count
+                                if let posCount = buf.readInteger(as: Int16.self), posCount > 0 {
+                                    var positions: [String] = []
+                                    for _ in 0..<posCount {
+                                        if let pos = buf.readInteger(as: UInt16.self) {
+                                            let position = pos & 0x3FFF // lower 14 bits
+                                            let weight = (pos >> 14) & 0x03
+                                            let weightChar: String
+                                            switch weight {
+                                            case 3: weightChar = "A"
+                                            case 2: weightChar = "B"
+                                            case 1: weightChar = "C"
+                                            default: weightChar = ""
+                                            }
+                                            positions.append("\(position)\(weightChar)")
+                                        }
+                                    }
+                                    entry += ":\(positions.joined(separator: ","))"
+                                }
+                                lexemes.append(entry)
+                            } else { break }
+                        } else { break }
+                    }
+                    if !lexemes.isEmpty {
+                        return lexemes.joined(separator: " ")
+                    }
+                }
+            }
+            
+        case .tsquery:
+            // tsquery binary format is complex (tree of operators and operands).
+            // Fall through to String.self which may work for text-format results.
+            // For binary format, show raw hex as fallback.
+            break
+            
+        // MARK: - Bit string types
+            
+        case .bit, .varbit:
+            // Binary format: Int32 bit count, then ceil(bitCount/8) bytes
+            if var buf = column.bytes, buf.readableBytes >= 4 {
+                if let bitCount = buf.readInteger(as: Int32.self), bitCount >= 0 {
+                    let byteCount = (Int(bitCount) + 7) / 8
+                    if buf.readableBytes == byteCount {
+                        var bits = ""
+                        var remaining = Int(bitCount)
+                        for _ in 0..<byteCount {
+                            if let byte = buf.readInteger(as: UInt8.self) {
+                                let bitsInThisByte = min(remaining, 8)
+                                for j in (8 - bitsInThisByte)..<8 {
+                                    bits += (byte & (1 << (7 - j))) != 0 ? "1" : "0"
+                                }
+                                remaining -= bitsInThisByte
+                            }
+                        }
+                        return bits
+                    }
+                }
+            }
+            
+        // MARK: - Range types
+            
+        case .int4Range:
+            return decodeRange(column, boundDecoder: { buf in
+                buf.readInteger(as: Int32.self).map { String($0) }
+            })
+        case .int8Range:
+            return decodeRange(column, boundDecoder: { buf in
+                buf.readInteger(as: Int64.self).map { String($0) }
+            })
+        case .numrange:
+            return decodeRange(column, boundDecoder: { buf in
+                decodeNumericFromBuffer(&buf)
+            })
+        case .daterange:
+            return decodeRange(column, boundDecoder: { buf in
+                // date: Int32 days since 2000-01-01
+                guard let days = buf.readInteger(as: Int32.self) else { return nil }
+                let epoch = DateComponents(calendar: Calendar(identifier: .gregorian), timeZone: TimeZone(identifier: "UTC"), year: 2000, month: 1, day: 1).date!
+                let date = Calendar(identifier: .gregorian).date(byAdding: .day, value: Int(days), to: epoch)!
+                let f = DateFormatter()
+                f.dateFormat = "yyyy-MM-dd"
+                f.timeZone = TimeZone(identifier: "UTC")
+                return f.string(from: date)
+            })
+        case .tsrange:
+            return decodeRange(column, boundDecoder: { buf in
+                // timestamp: Int64 microseconds since 2000-01-01
+                guard let micros = buf.readInteger(as: Int64.self) else { return nil }
+                let epoch = DateComponents(calendar: Calendar(identifier: .gregorian), timeZone: TimeZone(identifier: "UTC"), year: 2000, month: 1, day: 1).date!
+                let date = epoch.addingTimeInterval(Double(micros) / 1_000_000.0)
+                let f = DateFormatter()
+                f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                f.timeZone = TimeZone(identifier: "UTC")
+                return f.string(from: date)
+            })
+        case .tstzrange:
+            return decodeRange(column, boundDecoder: { buf in
+                guard let micros = buf.readInteger(as: Int64.self) else { return nil }
+                let epoch = DateComponents(calendar: Calendar(identifier: .gregorian), timeZone: TimeZone(identifier: "UTC"), year: 2000, month: 1, day: 1).date!
+                let date = epoch.addingTimeInterval(Double(micros) / 1_000_000.0)
+                let f = DateFormatter()
+                f.dateFormat = "yyyy-MM-dd HH:mm:ssZ"
+                f.timeZone = TimeZone(identifier: "UTC")
+                return f.string(from: date)
+            })
+            
+        // MARK: - XML (text-based, but explicitly handled to be safe)
+        case .xml:
+            if let value = try? column.decode(String.self) {
+                return value
+            }
+            
         default:
+            // Try to detect pgvector binary format: 2-byte dimension count + N * 4-byte float32
+            // This handles USER-DEFINED types like vector where the OID is installation-specific
+            if var buf = column.bytes, buf.readableBytes >= 4 {
+                let savedReaderIndex = buf.readerIndex
+                if let dim = buf.readInteger(as: UInt16.self),
+                   buf.readableBytes == Int(dim) * 4 + 2, // +2 for unused flags
+                   let _ = buf.readInteger(as: UInt16.self) { // unused flags
+                    var floats: [String] = []
+                    floats.reserveCapacity(Int(dim))
+                    for _ in 0..<dim {
+                        if let bits = buf.readInteger(as: UInt32.self) {
+                            let value = Float(bitPattern: bits)
+                            floats.append(String(value))
+                        }
+                    }
+                    if floats.count == Int(dim) {
+                        return "[" + floats.joined(separator: ",") + "]"
+                    }
+                }
+                buf.moveReaderIndex(to: savedReaderIndex)
+            }
             break
         }
         
@@ -321,6 +674,122 @@ actor PostgreSQLService {
         }
         
         return "NULL"
+    }
+    
+    /// Formats an array of strings as a PostgreSQL array literal: {el1,el2,...}
+    /// Elements containing commas, quotes, braces, backslashes, or whitespace are quoted.
+    private func formatPgArray(_ elements: [String]) -> String {
+        let formatted = elements.map { el in
+            if el.isEmpty || el.rangeOfCharacter(from: CharacterSet(charactersIn: ",\"{}\\  \t\n")) != nil {
+                return "\"" + el.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+            }
+            return el
+        }
+        return "{" + formatted.joined(separator: ",") + "}"
+    }
+    
+    /// Formats a Double for geometric type display, stripping unnecessary trailing zeros.
+    private func formatGeoDouble(_ value: Double) -> String {
+        if value == value.rounded() && abs(value) < 1e15 {
+            return String(format: "%.0f", value)
+        }
+        let str = String(value)
+        return str
+    }
+    
+    /// Decodes a PostgreSQL range from binary format.
+    /// Range binary format: 1 byte flags, then optional lower/upper bounds.
+    /// Flags: 0x01=empty, 0x02=lower inclusive, 0x04=upper inclusive, 0x08=lower infinite, 0x10=upper infinite
+    private func decodeRange(_ column: PostgresCell, boundDecoder: (inout ByteBuffer) -> String?) -> String {
+        guard var buf = column.bytes, buf.readableBytes >= 1,
+              let flags = buf.readInteger(as: UInt8.self) else {
+            return "NULL"
+        }
+        
+        let isEmpty = (flags & 0x01) != 0
+        if isEmpty { return "empty" }
+        
+        let lowerInclusive = (flags & 0x02) != 0
+        let upperInclusive = (flags & 0x04) != 0
+        let lowerInfinite = (flags & 0x08) != 0
+        let upperInfinite = (flags & 0x10) != 0
+        
+        var lowerStr = ""
+        if lowerInfinite {
+            lowerStr = ""
+        } else if let len = buf.readInteger(as: Int32.self), len > 0,
+                  var boundBuf = buf.readSlice(length: Int(len)) {
+            lowerStr = boundDecoder(&boundBuf) ?? ""
+        }
+        
+        var upperStr = ""
+        if upperInfinite {
+            upperStr = ""
+        } else if let len = buf.readInteger(as: Int32.self), len > 0,
+                  var boundBuf = buf.readSlice(length: Int(len)) {
+            upperStr = boundDecoder(&boundBuf) ?? ""
+        }
+        
+        let leftBracket = lowerInclusive ? "[" : "("
+        let rightBracket = upperInclusive ? "]" : ")"
+        return "\(leftBracket)\(lowerStr),\(upperStr)\(rightBracket)"
+    }
+    
+    /// Decodes a PostgreSQL numeric value from a ByteBuffer (binary format).
+    /// Numeric binary format: Int16 ndigits, Int16 weight, Int16 sign (0=pos, 0x4000=neg, 0xC000=NaN),
+    /// Int16 dscale, then ndigits * Int16 base-10000 digits.
+    private func decodeNumericFromBuffer(_ buf: inout ByteBuffer) -> String? {
+        guard buf.readableBytes >= 8,
+              let ndigits = buf.readInteger(as: Int16.self),
+              let weight = buf.readInteger(as: Int16.self),
+              let sign = buf.readInteger(as: UInt16.self),
+              let dscale = buf.readInteger(as: Int16.self) else { return nil }
+        
+        if sign == 0xC000 { return "NaN" }
+        
+        var digits: [Int16] = []
+        for _ in 0..<ndigits {
+            guard let d = buf.readInteger(as: Int16.self) else { return nil }
+            digits.append(d)
+        }
+        
+        if ndigits == 0 {
+            if dscale > 0 {
+                return (sign == 0x4000 ? "-0." : "0.") + String(repeating: "0", count: Int(dscale))
+            }
+            return sign == 0x4000 ? "-0" : "0"
+        }
+        
+        // Build integer part
+        var intPart = ""
+        let intDigitCount = Int(weight) + 1
+        for i in 0..<intDigitCount {
+            let d = i < digits.count ? digits[i] : 0
+            if i == 0 {
+                intPart += String(d) // no leading zeros on first group
+            } else {
+                intPart += String(format: "%04d", d)
+            }
+        }
+        if intPart.isEmpty { intPart = "0" }
+        
+        // Build fractional part
+        var fracPart = ""
+        if dscale > 0 {
+            for i in intDigitCount..<digits.count {
+                fracPart += String(format: "%04d", digits[i])
+            }
+            // Pad to dscale if needed
+            while fracPart.count < Int(dscale) { fracPart += "0" }
+            // Trim to dscale
+            fracPart = String(fracPart.prefix(Int(dscale)))
+        }
+        
+        let prefix = sign == 0x4000 ? "-" : ""
+        if fracPart.isEmpty {
+            return prefix + intPart
+        }
+        return prefix + intPart + "." + fracPart
     }
     
     func fetchTables() async throws -> [DatabaseTable] {
