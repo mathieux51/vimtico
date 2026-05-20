@@ -163,36 +163,24 @@ struct ContentView: View {
         
         if viewModel.awaitingPaneSwitch {
             viewModel.awaitingPaneSwitch = false
-            // Exit results visual mode when leaving results pane
-            viewModel.exitResultsVisualMode()
-            switch event.charactersIgnoringModifiers {
-            case "h":
-                viewModel.focusedPane = .sidebar
-                viewModel.dismissAutocomplete()
-                Self.resignEditorFocus()
-                return nil
-            case "j":
-                viewModel.focusedPane = .results
-                viewModel.dismissAutocomplete()
-                Self.resignEditorFocus()
-                return nil
-            case "k":
-                viewModel.focusedPane = .editor
-                Self.restoreEditorFocus()
-                return nil
-            case "l":
-                if viewModel.focusedPane == .sidebar {
-                    viewModel.focusedPane = .editor
-                    Self.restoreEditorFocus()
-                } else {
-                    viewModel.focusedPane = .results
-                    viewModel.dismissAutocomplete()
+            if let chars = event.charactersIgnoringModifiers {
+                switch chars {
+                case "h":
+                    viewModel.focusedPane = .sidebar
                     Self.resignEditorFocus()
+                    return nil
+                case "l":
+                    viewModel.focusedPane = .results
+                    Self.resignEditorFocus()
+                    return nil
+                case "j", "k":
+                    viewModel.focusedPane = .editor
+                    return nil
+                default:
+                    break
                 }
-                return nil
-            default:
-                return event
             }
+            return nil
         }
         
         // Pane-specific key handling (vim navigation works in all non-editor panes)
@@ -267,6 +255,55 @@ struct ContentView: View {
                 viewModel.exitResultsVisualMode()
             } else {
                 viewModel.enterVisualBlockMode()
+            }
+            return nil
+        }
+        
+        // Arrow keys for navigation
+        let keyCode = event.keyCode
+        if keyCode == 125 || keyCode == 126 || keyCode == 123 || keyCode == 124 {
+            if let result = viewModel.queryResult, !result.columns.isEmpty {
+                let rows = viewModel.filteredResultRows ?? result.rows
+                let rowCount = rows.count
+                let colCount = result.columns.count
+                if rowCount > 0 {
+                    switch keyCode {
+                    case 125: // down
+                        let current = viewModel.selectedResultRow ?? -1
+                        viewModel.selectedResultRow = min(current + 1, rowCount - 1)
+                    case 126: // up
+                        let current = viewModel.selectedResultRow ?? 0
+                        viewModel.selectedResultRow = max(current - 1, 0)
+                    case 123: // left
+                        if viewModel.selectedResultRow == nil { viewModel.selectedResultRow = 0 }
+                        viewModel.selectedResultColumn = max(viewModel.selectedResultColumn - 1, 0)
+                    case 124: // right
+                        if viewModel.selectedResultRow == nil { viewModel.selectedResultRow = 0 }
+                        viewModel.selectedResultColumn = min(viewModel.selectedResultColumn + 1, colCount - 1)
+                    default: break
+                    }
+                }
+            } else if viewModel.tableInfo != nil {
+                let columns = viewModel.filteredSchemaRows ?? viewModel.tableInfo!.columns
+                let rowCount = columns.count
+                let schemaColCount = 5
+                if rowCount > 0 {
+                    switch keyCode {
+                    case 125: // down
+                        let current = viewModel.selectedSchemaRow ?? -1
+                        viewModel.selectedSchemaRow = min(current + 1, rowCount - 1)
+                    case 126: // up
+                        let current = viewModel.selectedSchemaRow ?? 0
+                        viewModel.selectedSchemaRow = max(current - 1, 0)
+                    case 123: // left
+                        if viewModel.selectedSchemaRow == nil { viewModel.selectedSchemaRow = 0 }
+                        viewModel.selectedResultColumn = max(viewModel.selectedResultColumn - 1, 0)
+                    case 124: // right
+                        if viewModel.selectedSchemaRow == nil { viewModel.selectedSchemaRow = 0 }
+                        viewModel.selectedResultColumn = min(viewModel.selectedResultColumn + 1, schemaColCount - 1)
+                    default: break
+                    }
+                }
             }
             return nil
         }
@@ -432,6 +469,20 @@ struct ContentView: View {
         if event.keyCode == 116 || (mods.contains(.control) && event.charactersIgnoringModifiers == "u") {
             if tableCount > 0 {
                 viewModel.selectedTableIndex = max(viewModel.selectedTableIndex - pageSize, 0)
+            }
+            return nil
+        }
+        
+        // Arrow keys for navigation
+        if event.keyCode == 125 || event.keyCode == 126 {
+            if tableCount > 0 {
+                switch event.keyCode {
+                case 125: // down
+                    viewModel.selectedTableIndex = min(viewModel.selectedTableIndex + 1, tableCount - 1)
+                case 126: // up
+                    viewModel.selectedTableIndex = max(viewModel.selectedTableIndex - 1, 0)
+                default: break
+                }
             }
             return nil
         }
